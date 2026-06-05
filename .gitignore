@@ -4,8 +4,15 @@
 # Logs
 *.log
 
+# Dependencies
+node_modules/
+
 # Environment
 .env
 .env.*
 !.env.example
 
+# Browser automation artifacts
+output/playwright/*.png
+output/playwright/*.json
+!output/playwright/.gitkeep
