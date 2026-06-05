@@ -1,0 +1,11 @@
+# macOS
+.DS_Store
+
+# Logs
+*.log
+
+# Environment
+.env
+.env.*
+!.env.example
+
