@@ -1,6 +1,7 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { executeChromeJavascript, findSellerHomeTab } from './chrome_automation.js';
+import { parseHumanDelayConfig, randomHumanDelayMs } from './human_timing.js';
 
 const DEFAULT_WAIT_MS = 2 * 60 * 1000;
 const OUTPUT_PATH = 'output/sales-data.json';
@@ -14,17 +15,19 @@ async function main() {
   }
 
   const waitMs = Number.parseInt(process.env.SELLER_HOME_WAIT_MS || `${DEFAULT_WAIT_MS}`, 10);
+  const humanDelayConfig = parseHumanDelayConfig(process.env);
   console.log(`Seller Central home tab detected: ${sellerTab.url}`);
   console.log(`Waiting ${Math.round(waitMs / 1000)} seconds before collecting sales data...`);
   await sleep(waitMs);
 
+  await humanPause('opening sales management parent menu', humanDelayConfig);
   await executeStep(sellerTab, buildClickSalesParentScript());
-  await sleep(1500);
+  await humanPause('opening sales management child menu', humanDelayConfig);
   await executeStep(sellerTab, buildClickSalesChildScript());
-  await sleep(3000);
+  await humanPause('checking for guide dialog', humanDelayConfig);
   await executeStep(sellerTab, buildDismissGuideScript());
-  await sleep(1500);
 
+  await humanPause('reading SKU sales table', humanDelayConfig);
   const rawResult = await executeStep(sellerTab, buildCollectSalesDataScript());
   const result = JSON.parse(rawResult);
 
@@ -227,6 +230,12 @@ function browserHelpers() {
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function humanPause(label, config) {
+  const delayMs = randomHumanDelayMs(config);
+  console.log(`Human-like pause before ${label}: ${(delayMs / 1000).toFixed(1)} seconds`);
+  await sleep(delayMs);
 }
 
 main().catch((error) => {
