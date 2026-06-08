@@ -5,7 +5,11 @@
   "type": "module",
   "scripts": {
     "test": "node --test",
-    "login": "node scripts/login_seller_central.js"
+    "open-login": "node scripts/open_login_in_chrome.js",
+    "check-seller-home": "node scripts/check_seller_home_in_chrome.js",
+    "collect-sales": "node scripts/collect_sales_data_in_chrome.js",
+    "login": "node scripts/login_seller_central.js",
+    "debug:login-submit": "node scripts/debug_login_submit.js"
   },
   "dependencies": {
     "playwright": "^1.56.0"

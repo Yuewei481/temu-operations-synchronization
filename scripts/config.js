@@ -45,6 +45,8 @@ export function readSellerConfig(env) {
     loginUrl: env.SELLER_LOGIN_URL || DEFAULT_LOGIN_URL,
     storageStatePath: env.SELLER_STORAGE_STATE_PATH || 'output/playwright/seller-storage-state.json',
     screenshotPath: env.SELLER_FAILURE_SCREENSHOT_PATH || 'output/playwright/login-failure.png',
+    browserChannel: env.BROWSER_CHANNEL || '',
+    userDataDir: env.USER_DATA_DIR || 'output/playwright/browser-profile',
     headless: env.HEADLESS === '1' || env.HEADLESS === 'true',
   };
 }
