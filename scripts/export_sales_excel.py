@@ -190,40 +190,56 @@ def normalize_spu(value):
 
 
 def merge_rows_by_spu(data, source_rows=None):
-    merged = {}
+    sales_by_spu = {}
+    traffic_by_spu = {}
     order = []
 
     for sale in data.get("records", []):
         spu_id = str(sale.get("spuId") or "").strip()
         if not spu_id:
             continue
-        row = merged.setdefault(spu_id, {"spuId": spu_id})
         if spu_id not in order:
             order.append(spu_id)
-        row["todaySales"] = sale.get("todaySales", "")
+        sales_by_spu[spu_id] = sale.get("todaySales", "")
 
     for traffic in data.get("trafficAnalysis", {}).get("records", []):
         spu_id = str(traffic.get("spuId") or "").strip()
         if not spu_id:
             continue
-        row = merged.setdefault(spu_id, {"spuId": spu_id})
         if spu_id not in order:
             order.append(spu_id)
-        row["trafficDate"] = traffic.get("date", "")
-        row["exposure"] = traffic.get("exposure", "")
-        row["clicks"] = traffic.get("clicks", "")
-        row["imageSrc"] = traffic.get("imageSrc", "")
+        traffic_by_spu.setdefault(spu_id, []).append(
+            {
+                "trafficDate": traffic.get("date", ""),
+                "exposure": traffic.get("exposure", ""),
+                "clicks": traffic.get("clicks", ""),
+                "imageSrc": traffic.get("imageSrc", ""),
+            }
+        )
 
     if source_rows is None:
-        return [merged[spu_id] for spu_id in order]
+        rows = []
+        for spu_id in order:
+            base = {"spuId": spu_id, "todaySales": sales_by_spu.get(spu_id, "")}
+            traffic_rows = traffic_by_spu.get(spu_id) or [{}]
+            for traffic_row in traffic_rows:
+                rows.append({**base, **traffic_row})
+        return rows
 
     rows = []
     for source_row in source_rows:
         spu_id = source_row["spuId"]
-        row = {**source_row, **merged.get(spu_id, {"spuId": spu_id})}
-        row["name"] = source_row.get("name") or ""
-        row["sourceImagePath"] = source_row.get("sourceImagePath")
-        rows.append(row)
+        traffic_rows = traffic_by_spu.get(spu_id) or [{}]
+        for traffic_row in traffic_rows:
+            row = {
+                **source_row,
+                "spuId": spu_id,
+                "todaySales": sales_by_spu.get(spu_id, ""),
+                **traffic_row,
+            }
+            row["name"] = source_row.get("name") or ""
+            row["sourceImagePath"] = source_row.get("sourceImagePath")
+            rows.append(row)
     return rows
 
 

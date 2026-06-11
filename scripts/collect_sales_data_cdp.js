@@ -321,21 +321,24 @@ async function collectSalesRecordsOnCurrentPage(page, pageNumber, humanDelayConf
 }
 
 async function collectEuTrafficAnalysis(page, humanDelayConfig) {
-  const targetDate = process.env.TRAFFIC_TARGET_DATE || yesterdayDateInTimeZone('Asia/Shanghai');
+  const targetDates = readTrafficTargetDates(process.env);
+  const trafficDateRange = process.env.TRAFFIC_DATE_RANGE || chooseTrafficDateRange(targetDates);
   await openTrafficAnalysisPage(page, humanDelayConfig);
   await selectEuRegion(page, humanDelayConfig);
-  await selectYesterdayTrafficDate(page, humanDelayConfig);
+  await selectTrafficDateRange(page, humanDelayConfig, trafficDateRange);
   await waitForTrafficListPageWithRefresh(
     page,
     humanDelayConfig,
     Number.parseInt(process.env.TRAFFIC_TABLE_TIMEOUT_MS || `${DEFAULT_TRAFFIC_TABLE_TIMEOUT_MS}`, 10),
+    trafficDateRange,
   );
 
   const pages = [];
   const records = [];
   const seenPages = new Set();
   const maxPages = Number.parseInt(process.env.TRAFFIC_MAX_PAGES || '30', 10);
-  console.log(`Traffic target date: ${targetDate}`);
+  console.log(`Traffic target date(s): ${targetDates.join(', ')}`);
+  console.log(`Traffic date range selected in page: ${trafficDateRange}`);
 
   for (let pageLoopIndex = 0; pageLoopIndex < maxPages; pageLoopIndex += 1) {
     await dismissFeedbackPopup(page);
@@ -347,7 +350,7 @@ async function collectEuTrafficAnalysis(page, humanDelayConfig) {
     seenPages.add(activePage);
 
     await humanPause(`reading traffic list page ${activePage}`, humanDelayConfig);
-    const pageRecords = await collectTrafficDetailsOnCurrentPage(page, activePage, humanDelayConfig, targetDate);
+    const pageRecords = await collectTrafficDetailsOnCurrentPage(page, activePage, humanDelayConfig, targetDates);
     pages.push({
       pageNumber: activePage,
       totalText: state.totalText,
@@ -379,6 +382,8 @@ async function collectEuTrafficAnalysis(page, humanDelayConfig) {
   return {
     collectedAt: new Date().toISOString(),
     region: '欧区',
+    targetDates,
+    dateRange: trafficDateRange,
     url: await evaluate(page, 'location.href'),
     title: await evaluate(page, 'document.title'),
     pages,
@@ -436,19 +441,19 @@ async function selectEuRegion(page, humanDelayConfig) {
   }
 }
 
-async function selectYesterdayTrafficDate(page, humanDelayConfig) {
+async function selectTrafficDateRange(page, humanDelayConfig, dateRange) {
   await waitForTrafficDateControls(page, 60000);
   const alreadyHasRows = await evaluate(page, 'Boolean(document.body && document.body.innerText.includes("查看详情"))');
   const activeDate = await evaluate(page, buildActiveTrafficDateScript());
-  if (alreadyHasRows && activeDate === '昨日') {
-    console.log('Step 5.4: traffic date is already 昨日.');
+  if (alreadyHasRows && activeDate === dateRange) {
+    console.log(`Step 5.4: traffic date range is already ${dateRange}.`);
     return;
   }
 
-  console.log('Step 5.4: selecting traffic date: 昨日');
-  await humanPause('selecting yesterday traffic date', humanDelayConfig);
-  await clickPoint(page, buildTrafficDatePointScript('昨日'));
-  await waitForTrafficDateRows(page, 60000);
+  console.log(`Step 5.4: selecting traffic date range: ${dateRange}`);
+  await humanPause(`selecting traffic date range ${dateRange}`, humanDelayConfig);
+  await clickPoint(page, buildTrafficDatePointScript(dateRange));
+  await waitForTrafficDateRows(page, 60000, dateRange);
 }
 
 async function waitForTrafficDateControls(page, timeoutMs) {
@@ -524,7 +529,7 @@ async function waitForTrafficListPage(page, timeoutMs) {
   throw new Error('流量分析页面已打开，但没有在限定时间内看到商品明细和查看详情');
 }
 
-async function waitForTrafficListPageWithRefresh(page, humanDelayConfig, timeoutMs) {
+async function waitForTrafficListPageWithRefresh(page, humanDelayConfig, timeoutMs, dateRange) {
   const maxRefreshes = Number.parseInt(process.env.TRAFFIC_REFRESH_RETRIES || '2', 10);
   for (let attempt = 0; attempt <= maxRefreshes; attempt += 1) {
     const ready = await waitForTrafficListPageOrEmpty(page, timeoutMs);
@@ -536,7 +541,7 @@ async function waitForTrafficListPageWithRefresh(page, humanDelayConfig, timeout
       break;
     }
 
-    console.log(`Traffic list still has no detail rows after selecting 昨日 (${ready}); refreshing page and trying again...`);
+    console.log(`Traffic list still has no detail rows after selecting ${dateRange} (${ready}); refreshing page and trying again...`);
     await humanPause('refreshing traffic analysis page', humanDelayConfig);
     await page.send('Page.reload', { ignoreCache: true });
     let recovered = await waitForEuTrafficPage(page, 60000);
@@ -547,7 +552,7 @@ async function waitForTrafficListPageWithRefresh(page, humanDelayConfig, timeout
     }
 
     try {
-      await selectYesterdayTrafficDate(page, humanDelayConfig);
+      await selectTrafficDateRange(page, humanDelayConfig, dateRange);
     } catch (error) {
       if (!String(error.message || error).includes('日期筛选按钮')) {
         throw error;
@@ -556,7 +561,7 @@ async function waitForTrafficListPageWithRefresh(page, humanDelayConfig, timeout
       console.log('Traffic date controls did not appear after refresh; navigating to EU traffic URL directly and retrying.');
       await evaluate(page, `location.href = "${SELLER_EU_ORIGIN}${TRAFFIC_ANALYSIS_PATH}"`);
       await waitForEuTrafficPage(page, 60000);
-      await selectYesterdayTrafficDate(page, humanDelayConfig);
+      await selectTrafficDateRange(page, humanDelayConfig, dateRange);
     }
   }
 
@@ -598,7 +603,7 @@ async function waitForTrafficListPageOrEmpty(page, timeoutMs) {
   return 'timeout';
 }
 
-async function waitForTrafficDateRows(page, timeoutMs) {
+async function waitForTrafficDateRows(page, timeoutMs, dateRange) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     const ready = await evaluate(
@@ -612,7 +617,7 @@ async function waitForTrafficDateRows(page, timeoutMs) {
     await sleep(POLL_INTERVAL_MS);
   }
 
-  throw new Error('点击昨日后，流量分析商品明细没有在限定时间内刷新');
+  throw new Error(`点击${dateRange}后，流量分析商品明细没有在限定时间内刷新`);
 }
 
 async function waitForTrafficPageChange(page, previousPageNumber, timeoutMs) {
@@ -629,7 +634,7 @@ async function waitForTrafficPageChange(page, previousPageNumber, timeoutMs) {
   throw new Error(`没有在限定时间内切换到流量分析下一页`);
 }
 
-async function collectTrafficDetailsOnCurrentPage(page, pageNumber, humanDelayConfig, targetDate) {
+async function collectTrafficDetailsOnCurrentPage(page, pageNumber, humanDelayConfig, targetDates) {
   const rows = JSON.parse(await evaluate(page, buildCollectTrafficListRowsScript()));
   const count = rows.length;
   const records = [];
@@ -649,24 +654,29 @@ async function collectTrafficDetailsOnCurrentPage(page, pageNumber, humanDelayCo
 
     await humanPause(`reading traffic detail ${index + 1}`, humanDelayConfig);
     const rawRecord = await evaluate(page, buildCollectTrafficDetailScript());
-    const record = normalizeTrafficRecordDate(JSON.parse(rawRecord), targetDate);
-    records.push({
-      ...record,
-      productTitle: row.productTitle || record.productTitle,
-      spuId: row.spuId || record.spuId,
-      listExposure: row.exposure,
-      listClicks: row.clicks,
-      imageSrc: row.imageSrc || record.imageSrc,
-      imageAlt: row.imageAlt || record.imageAlt,
-      imageStatus: row.imageStatus || record.imageStatus,
-      imageRect: row.imageRect || record.imageRect,
-      pageNumber,
-      rowIndex: index + 1,
-      source: 'cdp-traffic-detail',
-    });
+    const detailRecord = JSON.parse(rawRecord);
+    const selectedRecords = selectTrafficRecordsForTargetDates(detailRecord, targetDates);
+    for (const record of selectedRecords) {
+      records.push({
+        ...record,
+        productTitle: row.productTitle || record.productTitle,
+        spuId: row.spuId || record.spuId,
+        listExposure: row.exposure,
+        listClicks: row.clicks,
+        imageSrc: row.imageSrc || record.imageSrc,
+        imageAlt: row.imageAlt || record.imageAlt,
+        imageStatus: row.imageStatus || record.imageStatus,
+        imageRect: row.imageRect || record.imageRect,
+        pageNumber,
+        rowIndex: index + 1,
+        source: 'cdp-traffic-detail',
+      });
+    }
 
+    const logRecords = selectedRecords.length > 0 ? selectedRecords : [detailRecord];
     console.log(
-      `Read traffic detail ${index + 1}/${count}: SPU ${row.spuId || record.spuId || 'unknown'}, ${record.date}, exposure ${record.exposure}, clicks ${record.clicks}${record.dateWasNormalized ? ` (source date ${record.originalDate})` : ''}`,
+      `Read traffic detail ${index + 1}/${count}: SPU ${row.spuId || detailRecord.spuId || 'unknown'}, ` +
+        logRecords.map((record) => `${record.date || 'no-date'} exposure ${record.exposure}, clicks ${record.clicks}${record.dateWasNormalized ? ` (source date ${record.originalDate})` : ''}`).join('; '),
     );
     await humanPause(`finished traffic detail ${index + 1}`, humanDelayConfig);
     await humanPause(`closing traffic detail ${index + 1}`, humanDelayConfig);
@@ -678,17 +688,91 @@ async function collectTrafficDetailsOnCurrentPage(page, pageNumber, humanDelayCo
   return records;
 }
 
-function normalizeTrafficRecordDate(record, targetDate) {
-  if (!targetDate || !record?.date || record.date === targetDate) {
-    return record;
+function selectTrafficRecordsForTargetDates(detailRecord, targetDates) {
+  const sourceRows = Array.isArray(detailRecord?.detailRows) && detailRecord.detailRows.length > 0
+    ? detailRecord.detailRows
+    : [{ date: detailRecord?.date || '', exposure: detailRecord?.exposure || '', clicks: detailRecord?.clicks || '' }];
+  const records = [];
+
+  for (const targetDate of targetDates) {
+    const exact = sourceRows.find((row) => row.date === targetDate);
+    const chosen = exact || normalizeContinuousZeroTrafficRow(sourceRows[0], targetDate);
+    if (!chosen) {
+      console.log(`Traffic detail SPU ${detailRecord?.spuId || 'unknown'}: target date ${targetDate} not found.`);
+      continue;
+    }
+
+    records.push({
+      ...detailRecord,
+      ...chosen,
+      detailRows: undefined,
+      date: chosen.date,
+      exposure: chosen.exposure,
+      clicks: chosen.clicks,
+    });
   }
 
-  return {
-    ...record,
-    originalDate: record.date,
-    date: targetDate,
-    dateWasNormalized: true,
-  };
+  return records;
+}
+
+function normalizeContinuousZeroTrafficRow(row, targetDate) {
+  if (!row || !row.date || row.date === targetDate) {
+    return row;
+  }
+
+  if (isZeroValue(row.exposure) && isZeroValue(row.clicks)) {
+    return {
+      ...row,
+      originalDate: row.date,
+      date: targetDate,
+      dateWasNormalized: true,
+    };
+  }
+
+  return null;
+}
+
+function isZeroValue(value) {
+  const text = String(value ?? '').trim().replace(/,/g, '');
+  return text !== '' && Number(text) === 0;
+}
+
+function readTrafficTargetDates(env) {
+  const raw = env.TRAFFIC_TARGET_DATES || env.TRAFFIC_TARGET_DATE || '';
+  const parsed = raw
+    .split(/[,\s]+/)
+    .map((value) => normalizeConfiguredDate(value))
+    .filter(Boolean);
+  const unique = [...new Set(parsed)];
+  return unique.length > 0 ? unique : [yesterdayDateInTimeZone('Asia/Shanghai')];
+}
+
+function normalizeConfiguredDate(value) {
+  const text = String(value || '').trim();
+  if (!text) {
+    return '';
+  }
+
+  const match = /^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})$/.exec(text);
+  if (!match) {
+    throw new Error(`Invalid traffic target date "${text}". Use YYYY-MM-DD, for example 2026-06-09.`);
+  }
+
+  const [, year, month, day] = match;
+  return `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`;
+}
+
+function chooseTrafficDateRange(targetDates) {
+  const yesterday = yesterdayDateInTimeZone('Asia/Shanghai');
+  if (targetDates.length === 1 && targetDates[0] === yesterday) {
+    return '昨日';
+  }
+
+  const now = Date.now();
+  const oldestAgeDays = Math.max(
+    ...targetDates.map((date) => Math.floor((now - new Date(`${date}T00:00:00+08:00`).getTime()) / (24 * 60 * 60 * 1000))),
+  );
+  return oldestAgeDays <= 7 ? '近7日' : '近30日';
 }
 
 function yesterdayDateInTimeZone(timeZone) {
@@ -1091,7 +1175,8 @@ function buildCollectTrafficDetailScript() {
     const categoryIndex = lines.findIndex((line, index) => index > detailIndex && line.startsWith('类目'));
     const productTitle = categoryIndex > 0 ? lines[categoryIndex - 1] : '';
     const spuId = extractSpuId(lines);
-    const topRow = extractFirstTrafficDetailRow(lines);
+    const detailRows = extractTrafficDetailRows(lines);
+    const topRow = detailRows[0] || { date: '', exposure: '', clicks: '' };
     const image = extractTopLeftProductImage();
 
     return JSON.stringify({
@@ -1100,6 +1185,7 @@ function buildCollectTrafficDetailScript() {
       date: topRow.date,
       exposure: topRow.exposure,
       clicks: topRow.clicks,
+      detailRows,
       imageSrc: image?.src || '',
       imageAlt: image?.alt || '',
       imageStatus: image?.status || 'not-found-or-not-loaded',
@@ -1124,34 +1210,38 @@ function buildCollectTrafficDetailScript() {
       return '';
     }
 
-    function extractFirstTrafficDetailRow(sourceLines) {
-      const coordinateRow = extractFirstTrafficDetailRowByCoordinates();
-      if (coordinateRow.date) {
-        return coordinateRow;
+    function extractTrafficDetailRows(sourceLines) {
+      const coordinateRows = extractTrafficDetailRowsByCoordinates();
+      if (coordinateRows.length > 0) {
+        return coordinateRows;
       }
 
-      return extractFirstTrafficDetailRowFromText(sourceLines);
+      return extractTrafficDetailRowsFromText(sourceLines);
     }
 
-    function extractFirstTrafficDetailRowFromText(sourceLines) {
+    function extractTrafficDetailRowsFromText(sourceLines) {
       const startIndex = sourceLines.findIndex((line) => line === '流量明细');
-      const dateIndex = sourceLines.findIndex((line, index) => index > startIndex && /^\d{4}-\d{2}-\d{2}$/.test(line));
-      if (dateIndex < 0) {
-        return { date: '', exposure: '', clicks: '' };
+      const rows = [];
+      for (let index = startIndex + 1; index < sourceLines.length; index += 1) {
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(sourceLines[index])) {
+          continue;
+        }
+
+        const numbersAfterDate = sourceLines
+          .slice(index + 1, index + 28)
+          .filter((line) => /^-?\d+(?:\.\d+)?%?$/.test(line));
+
+        rows.push({
+          date: sourceLines[index],
+          exposure: numbersAfterDate[0] || '',
+          clicks: numbersAfterDate[1] || '',
+        });
       }
 
-      const numbersAfterDate = sourceLines
-        .slice(dateIndex + 1, dateIndex + 28)
-        .filter((line) => /^-?\d+(?:\.\d+)?%?$/.test(line));
-
-      return {
-        date: sourceLines[dateIndex],
-        exposure: numbersAfterDate[0] || '',
-        clicks: numbersAfterDate[1] || '',
-      };
+      return rows;
     }
 
-    function extractFirstTrafficDetailRowByCoordinates() {
+    function extractTrafficDetailRowsByCoordinates() {
       const items = visibleViewportTextItems();
       const flowHeader = items
         .filter((item) => item.text === '流量明细')
@@ -1174,24 +1264,26 @@ function buildCollectTrafficDetailScript() {
           exposureHeader.rect.top + exposureHeader.rect.height,
           clicksHeader.rect.top + clicksHeader.rect.height,
         );
-        const firstDate = items
+        const dateItems = items
           .filter((item) => /^\d{4}-\d{2}-\d{2}$/.test(item.text))
           .filter((item) => item.rect.top > headerBottom - 4)
-          .sort((a, b) => a.rect.top - b.rect.top || a.rect.left - b.rect.left)[0];
-        if (!firstDate) {
+          .sort((a, b) => a.rect.top - b.rect.top || a.rect.left - b.rect.left);
+        if (dateItems.length === 0) {
           continue;
         }
 
-        const rowCenterY = firstDate.rect.top + firstDate.rect.height / 2;
-        const rowItems = items.filter((item) => Math.abs(item.rect.top + item.rect.height / 2 - rowCenterY) < 18);
-        return {
-          date: firstDate.text,
-          exposure: nearestNumericValue(rowItems, exposureHeader) || '',
-          clicks: nearestNumericValue(rowItems, clicksHeader) || '',
-        };
+        return dateItems.map((dateItem) => {
+          const rowCenterY = dateItem.rect.top + dateItem.rect.height / 2;
+          const rowItems = items.filter((item) => Math.abs(item.rect.top + item.rect.height / 2 - rowCenterY) < 18);
+          return {
+            date: dateItem.text,
+            exposure: nearestNumericValue(rowItems, exposureHeader) || '',
+            clicks: nearestNumericValue(rowItems, clicksHeader) || '',
+          };
+        });
       }
 
-      return { date: '', exposure: '', clicks: '' };
+      return [];
     }
 
     function nearestHeader(items, text, dateHeader) {

@@ -122,6 +122,13 @@ MANUAL_LOGIN_TIMEOUT_MS=600000
 HUMAN_DELAY_MIN_SECONDS=2
 HUMAN_DELAY_MAX_SECONDS=5
 
+# Optional. Leave blank to collect yesterday.
+# Use one date: TRAFFIC_TARGET_DATE=2026-06-09
+# Use multiple dates: TRAFFIC_TARGET_DATES=2026-06-09,2026-06-10
+TRAFFIC_TARGET_DATE=
+TRAFFIC_TARGET_DATES=
+TRAFFIC_DATE_RANGE=
+
 WPS_INITIAL_WAIT_MS=120000
 WPS_OPENAPI_TIMEOUT_MS=180000
 CLOSE_CHROME_AFTER_RUN=1
@@ -139,6 +146,7 @@ ACCOUNT_1_CHROME_PROFILE=C:\seller-central-profiles\temu1
 ACCOUNT_1_SOURCE_EXCEL=C:\seller-central-data\temu-reference.xlsx
 ACCOUNT_1_SOURCE_EXCEL_SPU_COLUMN=A
 ACCOUNT_1_GROUP_TITLE=TEMU 1
+ACCOUNT_1_TRAFFIC_TARGET_DATES=
 
 ACCOUNT_2_NAME=TEMU 2
 ACCOUNT_2_CDP_PORT=9223
@@ -146,6 +154,7 @@ ACCOUNT_2_CHROME_PROFILE=C:\seller-central-profiles\temu2
 ACCOUNT_2_SOURCE_EXCEL=C:\seller-central-data\temu-reference.xlsx
 ACCOUNT_2_SOURCE_EXCEL_SPU_COLUMN=D
 ACCOUNT_2_GROUP_TITLE=TEMU 2
+ACCOUNT_2_TRAFFIC_TARGET_DATES=
 ```
 
 常用字段说明：
@@ -157,6 +166,9 @@ ACCOUNT_2_GROUP_TITLE=TEMU 2
 - `WPS_OPENAPI_TIMEOUT_MS`：等待 WPS 表格编辑接口可用的最长时间。
 - `CLOSE_CHROME_AFTER_RUN`：设置为 `1` 时，脚本结束后自动关闭当前账号对应的 CDP Chrome。
 - `HUMAN_DELAY_MIN_SECONDS` / `HUMAN_DELAY_MAX_SECONDS`：每一步操作之间的随机等待秒数。
+- `TRAFFIC_TARGET_DATE`：可选。只采集某一天流量数据，例如 `2026-06-09`；不填写时默认昨天。
+- `TRAFFIC_TARGET_DATES`：可选。采集多天流量数据，用逗号分隔，例如 `2026-06-09,2026-06-10`。优先级高于 `TRAFFIC_TARGET_DATE`。
+- `TRAFFIC_DATE_RANGE`：可选。强制点击流量页的日期范围按钮，例如 `近7日` 或 `近30日`。通常不需要填写，脚本会按目标日期自动选择。
 - `ACCOUNT_COUNT`：要顺序处理多少个账号。
 - `ACCOUNT_1_NAME`：账号任务名称，只用于日志显示。
 - `ACCOUNT_1_CDP_PORT`：这个账号对应的 Chrome 控制端口。
@@ -164,6 +176,7 @@ ACCOUNT_2_GROUP_TITLE=TEMU 2
 - `ACCOUNT_1_SOURCE_EXCEL`：这个账号使用的本地 Excel 对照表。
 - `ACCOUNT_1_SOURCE_EXCEL_SPU_COLUMN`：在本地 Excel 中，哪个列用来匹配 SPU。
 - `ACCOUNT_1_GROUP_TITLE`：WPS 表格第 1 行中的店铺区域标题。
+- `ACCOUNT_1_TRAFFIC_TARGET_DATES`：可选。只覆盖这个账号的目标流量日期；为空时使用全局日期或默认昨天。
 
 如果只运行一个店铺，可以把 `ACCOUNT_COUNT` 改成 `1`，只保留 `ACCOUNT_1_*`。
 
@@ -253,6 +266,7 @@ output/wps-append-payload.json
 - `CLOSE_CHROME_AFTER_RUN=1` 只会关闭脚本通过对应 CDP 端口控制的 Chrome，不会主动关闭你的日常 Chrome。
 - 如果 TEMU 店铺商品少于分页数量，页面不会显示分页按钮，这是正常情况，脚本会读取当前页。
 - 如果流量详情里最上面的日期不是目标日期，但曝光量和点击量为 0，脚本会按目标日期处理，适配 TEMU 对连续 0 数据不更新日期的显示规则。
+- 如果配置多个流量日期，同一个商品会生成多条日期记录；销售管理页目前读取的是页面显示的“今日销量”，历史日期主要影响流量日期、曝光量和点击量。
 - 如果 WPS 页面加载慢，可以调大 `WPS_INITIAL_WAIT_MS` 和 `WPS_OPENAPI_TIMEOUT_MS`。
 - 如果担心操作太快，可以调大 `HUMAN_DELAY_MIN_SECONDS` 和 `HUMAN_DELAY_MAX_SECONDS`。
 

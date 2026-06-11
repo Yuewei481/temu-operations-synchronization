@@ -93,6 +93,9 @@ function readAccountsFromEnv(env) {
     wpsInitialWaitMs: env[`ACCOUNT_${index}_WPS_INITIAL_WAIT_MS`],
     closeChromeAfterRun: env[`ACCOUNT_${index}_CLOSE_CHROME_AFTER_RUN`],
     chromePath: env[`ACCOUNT_${index}_CHROME_PATH`],
+    trafficTargetDate: env[`ACCOUNT_${index}_TRAFFIC_TARGET_DATE`],
+    trafficTargetDates: env[`ACCOUNT_${index}_TRAFFIC_TARGET_DATES`],
+    trafficDateRange: env[`ACCOUNT_${index}_TRAFFIC_DATE_RANGE`],
     pythonBin: env[`ACCOUNT_${index}_PYTHON_BIN`],
   }));
 }
@@ -167,6 +170,9 @@ function normalizeAccount(rawAccount, configDir, index, baseEnv = process.env) {
     WPS_INITIAL_WAIT_MS: rawAccount.wpsInitialWaitMs,
     CLOSE_CHROME_AFTER_RUN: rawAccount.closeChromeAfterRun,
     CHROME_PATH: rawAccount.chromePath,
+    TRAFFIC_TARGET_DATE: rawAccount.trafficTargetDate,
+    TRAFFIC_TARGET_DATES: rawAccount.trafficTargetDates,
+    TRAFFIC_DATE_RANGE: rawAccount.trafficDateRange,
     PYTHON_BIN: rawAccount.pythonBin,
     ...(rawAccount.env || {}),
   });
