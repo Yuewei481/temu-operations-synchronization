@@ -1,0 +1,137 @@
+const DEFAULT_CDP_ORIGIN = 'http://127.0.0.1:9222';
+
+export function getCdpOrigin(env = process.env) {
+  return env.CDP_ORIGIN || DEFAULT_CDP_ORIGIN;
+}
+
+export async function listCdpPages(cdpOrigin = getCdpOrigin()) {
+  let response;
+  try {
+    response = await fetch(`${cdpOrigin}/json`);
+  } catch (error) {
+    throw new Error(
+      `Chrome CDP endpoint unavailable at ${cdpOrigin}/json. Start Chrome with npm run start-chrome:cdp, or launch Chrome with --remote-debugging-port=9222.`,
+    );
+  }
+
+  if (!response.ok) {
+    throw new Error(`Chrome CDP endpoint unavailable at ${cdpOrigin}/json (${response.status})`);
+  }
+
+  return response.json();
+}
+
+export async function activateCdpPage(page, cdpOrigin = getCdpOrigin()) {
+  if (!page?.id) {
+    return;
+  }
+
+  await fetch(`${cdpOrigin}/json/activate/${page.id}`).catch(() => {});
+}
+
+export async function findCdpPage(predicate, cdpOrigin = getCdpOrigin()) {
+  const pages = await listCdpPages(cdpOrigin);
+  return pages.find((page) => page.type === 'page' && predicate(page)) || null;
+}
+
+export class CdpPage {
+  constructor(page) {
+    if (!page?.webSocketDebuggerUrl) {
+      throw new Error('CDP page is missing webSocketDebuggerUrl');
+    }
+
+    this.page = page;
+    this.nextId = 1;
+    this.pending = new Map();
+    this.socket = new WebSocket(page.webSocketDebuggerUrl);
+    this.opened = new Promise((resolve, reject) => {
+      this.socket.addEventListener('open', resolve, { once: true });
+      this.socket.addEventListener('error', reject, { once: true });
+    });
+    this.socket.addEventListener('message', (event) => this.handleMessage(event));
+  }
+
+  async close() {
+    if (this.socket.readyState === WebSocket.OPEN || this.socket.readyState === WebSocket.CONNECTING) {
+      this.socket.close();
+    }
+  }
+
+  async send(method, params = {}) {
+    await this.opened;
+    const id = this.nextId;
+    this.nextId += 1;
+    const message = { id, method, params };
+
+    const result = new Promise((resolve, reject) => {
+      this.pending.set(id, { resolve, reject });
+    });
+
+    this.socket.send(JSON.stringify(message));
+    return result;
+  }
+
+  async evaluate(expression, options = {}) {
+    const response = await this.send('Runtime.evaluate', {
+      expression,
+      awaitPromise: options.awaitPromise ?? true,
+      returnByValue: options.returnByValue ?? true,
+    });
+
+    if (response.exceptionDetails) {
+      const description =
+        response.exceptionDetails.exception?.description ||
+        response.exceptionDetails.text ||
+        'Runtime.evaluate failed';
+      throw new Error(description);
+    }
+
+    return response.result?.value;
+  }
+
+  async click(x, y) {
+    await this.send('Input.dispatchMouseEvent', {
+      type: 'mouseMoved',
+      x,
+      y,
+      button: 'none',
+      buttons: 0,
+    });
+    await this.send('Input.dispatchMouseEvent', {
+      type: 'mousePressed',
+      x,
+      y,
+      button: 'left',
+      buttons: 1,
+      clickCount: 1,
+    });
+    await this.send('Input.dispatchMouseEvent', {
+      type: 'mouseReleased',
+      x,
+      y,
+      button: 'left',
+      buttons: 0,
+      clickCount: 1,
+    });
+  }
+
+  handleMessage(event) {
+    const payload = JSON.parse(event.data);
+    if (!payload.id) {
+      return;
+    }
+
+    const pending = this.pending.get(payload.id);
+    if (!pending) {
+      return;
+    }
+
+    this.pending.delete(payload.id);
+    if (payload.error) {
+      pending.reject(new Error(`${payload.error.message}: ${payload.error.data || ''}`.trim()));
+      return;
+    }
+
+    pending.resolve(payload.result);
+  }
+}

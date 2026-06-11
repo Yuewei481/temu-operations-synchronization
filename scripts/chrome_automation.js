@@ -4,6 +4,7 @@ import { promisify } from 'node:util';
 const execFileAsync = promisify(execFile);
 
 export const SELLER_HOME_ORIGIN = 'https://agentseller.temu.com';
+export const SELLER_SETTLE_ORIGIN = 'https://seller.kuajingmaihuo.com/settle';
 
 export async function listChromeTabs() {
   const script = `
@@ -24,7 +25,10 @@ export async function listChromeTabs() {
           set end of tabLines to (windowIndex as text) & "\t" & (tabIndex as text) & "\t" & tabTitle & "\t" & tabUrl
         end repeat
       end repeat
-      return tabLines
+      set AppleScript's text item delimiters to linefeed
+      set joinedLines to tabLines as text
+      set AppleScript's text item delimiters to ""
+      return joinedLines
     end tell
   `;
 
@@ -44,6 +48,15 @@ export async function findSellerHomeTab() {
   return tabs.find((tab) => tab.url.startsWith(SELLER_HOME_ORIGIN)) || null;
 }
 
+export async function findSellerEntryTab() {
+  const tabs = await listChromeTabs();
+  return (
+    tabs.find((tab) => tab.url.startsWith(SELLER_HOME_ORIGIN)) ||
+    tabs.find((tab) => tab.url.startsWith(SELLER_SETTLE_ORIGIN)) ||
+    null
+  );
+}
+
 export async function executeChromeJavascript(tab, source) {
   const script = `
     on run argv
@@ -56,11 +69,77 @@ export async function executeChromeJavascript(tab, source) {
     end run
   `;
 
-  const { stdout } = await execFileAsync(
-    'osascript',
-    ['-e', script, String(tab.windowIndex), String(tab.tabIndex), source],
-    { maxBuffer: 20 * 1024 * 1024 },
-  );
+  let stdout;
+  try {
+    ({ stdout } = await execFileAsync(
+      'osascript',
+      ['-e', script, String(tab.windowIndex), String(tab.tabIndex), source],
+      { maxBuffer: 20 * 1024 * 1024 },
+    ));
+  } catch (error) {
+    const message = `${error.stderr || ''}\n${error.message || ''}`;
+    if (message.includes('AppleScript') && message.includes('JavaScript')) {
+      throw new Error(
+        'Google Chrome blocked JavaScript from Apple Events. In Chrome, enable: View > Developer > Allow JavaScript from Apple Events, then run npm run collect-sales again.',
+      );
+    }
+
+    throw error;
+  }
 
   return stdout.trim();
+}
+
+export async function setChromeTabUrl(tab, url) {
+  const script = `
+    on run argv
+      set windowIndex to item 1 of argv as integer
+      set tabIndex to item 2 of argv as integer
+      set targetUrl to item 3 of argv
+      tell application "Google Chrome"
+        set URL of tab tabIndex of window windowIndex to targetUrl
+      end tell
+    end run
+  `;
+
+  await execFileAsync('osascript', ['-e', script, String(tab.windowIndex), String(tab.tabIndex), url], {
+    maxBuffer: 1024 * 1024,
+  });
+}
+
+export async function clickChromeScreenPoint(tab, point) {
+  const script = `
+    on run argv
+      set windowIndex to item 1 of argv as integer
+      set tabIndex to item 2 of argv as integer
+      set pointX to item 3 of argv as integer
+      set pointY to item 4 of argv as integer
+      tell application "Google Chrome"
+        activate
+        set active tab index of window windowIndex to tabIndex
+        set index of window windowIndex to 1
+      end tell
+      delay 0.2
+      tell application "System Events"
+        click at {pointX, pointY}
+      end tell
+    end run
+  `;
+
+  try {
+    await execFileAsync(
+      'osascript',
+      ['-e', script, String(tab.windowIndex), String(tab.tabIndex), String(Math.round(point.x)), String(Math.round(point.y))],
+      { maxBuffer: 1024 * 1024 },
+    );
+  } catch (error) {
+    const message = `${error.stderr || ''}\n${error.message || ''}`;
+    if (message.includes('不允许辅助访问') || message.includes('not allowed assistive access')) {
+      throw new Error(
+        'macOS blocked native mouse clicks from osascript. Enable Accessibility permission for osascript/Codex in System Settings > Privacy & Security > Accessibility, then run npm run collect-sales again.',
+      );
+    }
+
+    throw error;
+  }
 }

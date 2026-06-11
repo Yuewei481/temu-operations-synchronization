@@ -1,0 +1,22 @@
+{
+  "accounts": [
+    {
+      "name": "TEMU 1",
+      "cdpPort": 9222,
+      "chromeProfile": "C:\\seller-central-profiles\\temu1",
+      "sourceExcel": "C:\\seller-central-data\\temu1.xlsx",
+      "groupTitle": "TEMU 1",
+      "wpsDocUrl": "https://www.kdocs.cn/l/REMOVED_PRIVATE_DOCUMENT",
+      "wpsSheetName": "运营数据记录表"
+    },
+    {
+      "name": "TEMU 2",
+      "cdpPort": 9223,
+      "chromeProfile": "C:\\seller-central-profiles\\temu2",
+      "sourceExcel": "C:\\seller-central-data\\temu2.xlsx",
+      "groupTitle": "TEMU 2",
+      "wpsDocUrl": "https://www.kdocs.cn/l/REMOVED_PRIVATE_DOCUMENT",
+      "wpsSheetName": "运营数据记录表"
+    }
+  ]
+}
