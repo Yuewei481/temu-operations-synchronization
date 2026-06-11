@@ -738,7 +738,7 @@ function isZeroValue(value) {
 }
 
 function readTrafficTargetDates(env) {
-  const raw = env.TRAFFIC_TARGET_DATES || env.TRAFFIC_TARGET_DATE || '';
+  const raw = env.TRAFFIC_TARGET_DATES || '';
   const parsed = raw
     .split(/[,\s]+/)
     .map((value) => normalizeConfiguredDate(value))

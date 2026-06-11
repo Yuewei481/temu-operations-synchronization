@@ -123,9 +123,7 @@ HUMAN_DELAY_MIN_SECONDS=2
 HUMAN_DELAY_MAX_SECONDS=5
 
 # Optional. Leave blank to collect yesterday.
-# Use one date: TRAFFIC_TARGET_DATE=2026-06-09
-# Use multiple dates: TRAFFIC_TARGET_DATES=2026-06-09,2026-06-10
-TRAFFIC_TARGET_DATE=
+# Use one or multiple dates: TRAFFIC_TARGET_DATES=2026-06-09,2026-06-10
 TRAFFIC_TARGET_DATES=
 TRAFFIC_DATE_RANGE=
 
@@ -166,8 +164,7 @@ ACCOUNT_2_TRAFFIC_TARGET_DATES=
 - `WPS_OPENAPI_TIMEOUT_MS`：等待 WPS 表格编辑接口可用的最长时间。
 - `CLOSE_CHROME_AFTER_RUN`：设置为 `1` 时，脚本结束后自动关闭当前账号对应的 CDP Chrome。
 - `HUMAN_DELAY_MIN_SECONDS` / `HUMAN_DELAY_MAX_SECONDS`：每一步操作之间的随机等待秒数。
-- `TRAFFIC_TARGET_DATE`：可选。只采集某一天流量数据，例如 `2026-06-09`；不填写时默认昨天。
-- `TRAFFIC_TARGET_DATES`：可选。采集多天流量数据，用逗号分隔，例如 `2026-06-09,2026-06-10`。优先级高于 `TRAFFIC_TARGET_DATE`。
+- `TRAFFIC_TARGET_DATES`：可选。采集一个或多个流量日期，用逗号分隔，例如 `2026-06-09` 或 `2026-06-09,2026-06-10`；不填写时默认昨天。
 - `TRAFFIC_DATE_RANGE`：可选。强制点击流量页的日期范围按钮，例如 `近7日` 或 `近30日`。通常不需要填写，脚本会按目标日期自动选择。
 - `ACCOUNT_COUNT`：要顺序处理多少个账号。
 - `ACCOUNT_1_NAME`：账号任务名称，只用于日志显示。
