@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { resolve } from 'node:path';
-import { getCdpOrigin, listCdpPages } from './cdp_client.js';
+import { closeCdpBrowser, getCdpOrigin, listCdpPages } from './cdp_client.js';
 
 const DEFAULT_SOURCE_EXCEL_PATH = '/Users/yueweizhou/Desktop/工作簿12.xlsx';
 const BUNDLED_PYTHON_PATH = '/Users/yueweizhou/.cache/codex-runtimes/codex-primary-runtime/dependencies/python/bin/python3';
@@ -29,12 +29,18 @@ export async function syncOneAccount(options = {}) {
   console.log(`CDP origin: ${getCdpOrigin(env)}`);
   console.log(`Source Excel: ${sourceExcelPath}`);
 
-  await ensureChromeCdpAndSellerTab(env);
-  await runStep('Collect Seller Central data', process.execPath, ['scripts/collect_sales_data_cdp.js'], env);
-  await runStep('Build WPS update payload', pythonBin, ['scripts/build_wps_append_payload.py', sourceExcelPath], env);
-  await runStep('Update WPS existing rows', process.execPath, ['scripts/update_wps_existing_rows_cdp.js'], env);
+  try {
+    await ensureChromeCdpAndSellerTab(env);
+    await runStep('Collect Seller Central data', process.execPath, ['scripts/collect_sales_data_cdp.js'], env);
+    await runStep('Build WPS update payload', pythonBin, ['scripts/build_wps_append_payload.py', sourceExcelPath], env);
+    await runStep('Update WPS existing rows', process.execPath, ['scripts/update_wps_existing_rows_cdp.js'], env);
 
-  console.log('Sync workflow finished.');
+    console.log('Sync workflow finished.');
+  } finally {
+    if (truthy(env.CLOSE_CHROME_AFTER_RUN)) {
+      await closeChromeAfterRun(env);
+    }
+  }
 }
 
 function defaultPythonBin() {
@@ -131,6 +137,21 @@ function runStep(label, command, args, env = process.env) {
 
 function sleep(ms) {
   return new Promise((resolvePromise) => setTimeout(resolvePromise, ms));
+}
+
+async function closeChromeAfterRun(env) {
+  const cdpOrigin = getCdpOrigin(env);
+  console.log(`Closing Chrome for CDP endpoint: ${cdpOrigin}`);
+  try {
+    const closed = await closeCdpBrowser(cdpOrigin);
+    console.log(closed ? 'Chrome closed.' : 'Chrome close skipped: no CDP browser target found.');
+  } catch (error) {
+    console.log(`Chrome close failed: ${error.message}`);
+  }
+}
+
+function truthy(value) {
+  return ['1', 'true', 'yes', 'on'].includes(String(value || '').trim().toLowerCase());
 }
 
 function removeUndefinedValues(values) {

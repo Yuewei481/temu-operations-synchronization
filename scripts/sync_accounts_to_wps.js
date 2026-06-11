@@ -91,6 +91,7 @@ function readAccountsFromEnv(env) {
     sellerHomeAfterEntryMinWaitMs: env[`ACCOUNT_${index}_SELLER_HOME_AFTER_ENTRY_MIN_WAIT_MS`],
     sellerHomeAfterEntryTimeoutMs: env[`ACCOUNT_${index}_SELLER_HOME_AFTER_ENTRY_TIMEOUT_MS`],
     wpsInitialWaitMs: env[`ACCOUNT_${index}_WPS_INITIAL_WAIT_MS`],
+    closeChromeAfterRun: env[`ACCOUNT_${index}_CLOSE_CHROME_AFTER_RUN`],
     chromePath: env[`ACCOUNT_${index}_CHROME_PATH`],
     pythonBin: env[`ACCOUNT_${index}_PYTHON_BIN`],
   }));
@@ -164,6 +165,7 @@ function normalizeAccount(rawAccount, configDir, index, baseEnv = process.env) {
     SELLER_HOME_AFTER_ENTRY_MIN_WAIT_MS: rawAccount.sellerHomeAfterEntryMinWaitMs,
     SELLER_HOME_AFTER_ENTRY_TIMEOUT_MS: rawAccount.sellerHomeAfterEntryTimeoutMs,
     WPS_INITIAL_WAIT_MS: rawAccount.wpsInitialWaitMs,
+    CLOSE_CHROME_AFTER_RUN: rawAccount.closeChromeAfterRun,
     CHROME_PATH: rawAccount.chromePath,
     PYTHON_BIN: rawAccount.pythonBin,
     ...(rawAccount.env || {}),

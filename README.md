@@ -124,6 +124,7 @@ HUMAN_DELAY_MAX_SECONDS=5
 
 WPS_INITIAL_WAIT_MS=120000
 WPS_OPENAPI_TIMEOUT_MS=180000
+CLOSE_CHROME_AFTER_RUN=1
 
 CHROME_PATH=C:\Program Files\Google\Chrome\Application\chrome.exe
 
@@ -154,6 +155,7 @@ ACCOUNT_2_GROUP_TITLE=TEMU 2
 - `WPS_SHEET_NAME`：要写入的 sheet 名称。
 - `WPS_INITIAL_WAIT_MS`：打开 WPS 后先等待多久，给登录和文档加载留时间。
 - `WPS_OPENAPI_TIMEOUT_MS`：等待 WPS 表格编辑接口可用的最长时间。
+- `CLOSE_CHROME_AFTER_RUN`：设置为 `1` 时，脚本结束后自动关闭当前账号对应的 CDP Chrome。
 - `HUMAN_DELAY_MIN_SECONDS` / `HUMAN_DELAY_MAX_SECONDS`：每一步操作之间的随机等待秒数。
 - `ACCOUNT_COUNT`：要顺序处理多少个账号。
 - `ACCOUNT_1_NAME`：账号任务名称，只用于日志显示。
@@ -248,6 +250,7 @@ output/wps-append-payload.json
 - `CDP_PORT` 必须每个账号不同，例如 `9222`、`9223`。
 - `ACCOUNT_*_CHROME_PROFILE` 必须每个账号不同，否则不同店铺的登录状态会混在一起。
 - `ACCOUNT_*_SOURCE_EXCEL_SPU_COLUMN` 要和本地 Excel 真实结构一致。
+- `CLOSE_CHROME_AFTER_RUN=1` 只会关闭脚本通过对应 CDP 端口控制的 Chrome，不会主动关闭你的日常 Chrome。
 - 如果 TEMU 店铺商品少于分页数量，页面不会显示分页按钮，这是正常情况，脚本会读取当前页。
 - 如果流量详情里最上面的日期不是目标日期，但曝光量和点击量为 0，脚本会按目标日期处理，适配 TEMU 对连续 0 数据不更新日期的显示规则。
 - 如果 WPS 页面加载慢，可以调大 `WPS_INITIAL_WAIT_MS` 和 `WPS_OPENAPI_TIMEOUT_MS`。

@@ -34,6 +34,100 @@ export async function findCdpPage(predicate, cdpOrigin = getCdpOrigin()) {
   return pages.find((page) => page.type === 'page' && predicate(page)) || null;
 }
 
+export async function closeCdpBrowser(cdpOrigin = getCdpOrigin()) {
+  const browserWebSocketUrl = await getBrowserWebSocketUrl(cdpOrigin);
+  if (browserWebSocketUrl) {
+    await sendOneShotCdp(browserWebSocketUrl, 'Browser.close');
+    return true;
+  }
+
+  const pages = await listCdpPages(cdpOrigin);
+  const page = pages.find((item) => item.type === 'page' && item.webSocketDebuggerUrl);
+  if (!page) {
+    return false;
+  }
+
+  const cdpPage = new CdpPage(page);
+  try {
+    await cdpPage.send('Browser.close');
+  } finally {
+    await cdpPage.close();
+  }
+  return true;
+}
+
+async function getBrowserWebSocketUrl(cdpOrigin) {
+  try {
+    const response = await fetch(`${cdpOrigin}/json/version`);
+    if (!response.ok) {
+      return '';
+    }
+    const version = await response.json();
+    return version.webSocketDebuggerUrl || '';
+  } catch {
+    return '';
+  }
+}
+
+function sendOneShotCdp(webSocketUrl, method) {
+  return new Promise((resolve, reject) => {
+    const socket = new WebSocket(webSocketUrl);
+    const id = 1;
+    let settled = false;
+
+    const finish = (error) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      if (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING) {
+        socket.close();
+      }
+      if (error) {
+        reject(error);
+      } else {
+        resolve();
+      }
+    };
+
+    socket.addEventListener(
+      'open',
+      () => {
+        socket.send(JSON.stringify({ id, method }));
+      },
+      { once: true },
+    );
+
+    socket.addEventListener(
+      'error',
+      () => {
+        finish(new Error(`Unable to send ${method} to Chrome CDP browser target.`));
+      },
+      { once: true },
+    );
+
+    socket.addEventListener('message', (event) => {
+      const payload = JSON.parse(event.data);
+      if (payload.id !== id) {
+        return;
+      }
+      if (payload.error) {
+        finish(new Error(`${payload.error.message}: ${payload.error.data || ''}`.trim()));
+      } else {
+        finish();
+      }
+    });
+
+    socket.addEventListener(
+      'close',
+      () => {
+        finish();
+      },
+      { once: true },
+    );
+  });
+}
+
 export class CdpPage {
   constructor(page) {
     if (!page?.webSocketDebuggerUrl) {
