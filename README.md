@@ -23,9 +23,9 @@ Automates TEMU seller operations data collection, including daily sales, exposur
 
 ## 一、Mac 安装
 
-1. 安装 Node.js。
+1. 安装 Node.js 和 Python 3。
 
-   建议使用 Node.js 20 或更高版本。
+   建议使用 Node.js 20 或更高版本。Python 用于处理 Excel 和图片。
 
 2. 克隆项目并进入目录。
 
@@ -38,6 +38,7 @@ Automates TEMU seller operations data collection, including daily sales, exposur
 
    ```bash
    npm install
+   python3 -m pip install -r requirements.txt
    ```
 
 4. 创建配置文件。
@@ -56,9 +57,9 @@ Automates TEMU seller operations data collection, including daily sales, exposur
 
 ## 二、Windows 安装
 
-1. 安装 Node.js。
+1. 安装 Node.js 和 Python 3。
 
-   建议使用 Node.js 20 或更高版本。
+   建议使用 Node.js 20 或更高版本。安装 Python 时建议勾选 `Add Python to PATH`。
 
 2. 安装 Google Chrome。
 
@@ -73,6 +74,7 @@ Automates TEMU seller operations data collection, including daily sales, exposur
 
    ```bat
    npm install
+   python -m pip install -r requirements.txt
    ```
 
 5. 创建 `.env`。
