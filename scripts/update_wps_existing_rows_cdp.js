@@ -186,22 +186,23 @@ async function verifyTargetSheet(page, sheetName, storeGroupTitle, headerAliases
       const maxColumn = 120;
       const rowOne = [];
       for (let column = 1; column <= maxColumn; column += 1) {
-        const text = normalizeText(await cellTextByIndex(wpsApp, 1, column));
+        const text = normalizeText(await cellTextByIndex(wpsApp, 1, column, true));
         if (text) {
           rowOne.push({ column, text });
         }
       }
 
-      const groupStart = rowOne.find((cell) => normalizeGroupTitle(cell.text) === normalizeGroupTitle(groupTitle));
+      const targetGroupKey = normalizeGroupTitle(groupTitle);
+      const groupStart = rowOne.find((cell) => normalizeGroupTitle(cell.text) === targetGroupKey);
       if (!groupStart) {
         throw new Error(`Unable to find store group title in row 1: ${groupTitle}`);
       }
 
-      const nextGroup = rowOne.find((cell) => cell.column > groupStart.column);
+      const nextGroup = rowOne.find((cell) => cell.column > groupStart.column && normalizeGroupTitle(cell.text) !== targetGroupKey);
       const groupEndColumn = nextGroup ? nextGroup.column - 1 : Math.min(maxColumn, groupStart.column + 24);
       const headers = {};
       for (let column = groupStart.column; column <= groupEndColumn; column += 1) {
-        const text = normalizeHeader(await cellTextByIndex(wpsApp, 2, column));
+        const text = normalizeHeader(await cellTextByIndex(wpsApp, 2, column, true));
         if (!text) {
           continue;
         }
@@ -211,6 +212,8 @@ async function verifyTargetSheet(page, sheetName, storeGroupTitle, headerAliases
           }
         }
       }
+
+      applyRelativeHeaderFallback(headers, groupStart.column);
 
       const required = ['dateColumn', 'nameColumn', 'salesColumn', 'exposureColumn', 'clicksColumn'];
       for (const key of required) {
@@ -228,10 +231,34 @@ async function verifyTargetSheet(page, sheetName, storeGroupTitle, headerAliases
       };
     }
 
-    async function cellTextByIndex(wpsApp, row, column) {
+    function applyRelativeHeaderFallback(headers, groupStartColumn) {
+      const dateColumn = headers.dateColumn || groupStartColumn;
+      headers.dateColumn ||= dateColumn;
+      headers.nameColumn ||= dateColumn + 1;
+      headers.salesColumn ||= dateColumn + 3;
+      headers.exposureColumn ||= dateColumn + 4;
+      headers.clicksColumn ||= dateColumn + 5;
+    }
+
+    async function cellTextByIndex(wpsApp, row, column, useMergeTopLeft = false) {
       const address = `${columnName(column)}${row}`;
+      return cellText(wpsApp, address, useMergeTopLeft);
+    }
+
+    async function cellText(wpsApp, address, useMergeTopLeft = false) {
       const range = wpsApp.Range(address);
-      return String(await Promise.resolve(range.Text).catch(() => '') || '').trim();
+      const directText = String(await Promise.resolve(range.Text).catch(() => '') || '').trim();
+      if (directText || !useMergeTopLeft) {
+        return directText;
+      }
+
+      const mergeArea = await Promise.resolve(range.MergeArea).catch(() => null);
+      if (!mergeArea) {
+        return directText;
+      }
+
+      const mergedText = String(await Promise.resolve(mergeArea.Cells(1, 1).Text).catch(() => '') || '').trim();
+      return mergedText || directText;
     }
 
     function columnName(column) {
@@ -302,8 +329,8 @@ async function updateExistingRows(page, rows, { dryRun, layout }) {
     const clicksColumn = columnName(sheetLayout.clicksColumn);
 
     for (let rowIndex = 3; rowIndex <= maxRow; rowIndex += 1) {
-      const dateText = normalizeDate(await cellText(app, `${dateColumn}${rowIndex}`));
-      const nameText = normalizeName(await cellText(app, `${nameColumn}${rowIndex}`));
+      const dateText = normalizeDate(await cellText(app, `${dateColumn}${rowIndex}`, true));
+      const nameText = normalizeName(await cellText(app, `${nameColumn}${rowIndex}`, true));
       if (!dateText && !nameText) {
         continue;
       }
@@ -321,6 +348,7 @@ async function updateExistingRows(page, rows, { dryRun, layout }) {
 
     const updated = [];
     const missing = [];
+    const failedWrites = [];
     for (const payloadRow of payloadRows) {
       const dateText = normalizeDate(payloadRow.date);
       const nameText = normalizeName(payloadRow.name);
@@ -332,9 +360,30 @@ async function updateExistingRows(page, rows, { dryRun, layout }) {
       }
 
       if (!shouldDryRun) {
-        app.Range(`${salesColumn}${targetRow}`).Value = toCellNumberOrText(payloadRow.sales);
-        app.Range(`${exposureColumn}${targetRow}`).Value = toCellNumberOrText(payloadRow.exposure);
-        app.Range(`${clicksColumn}${targetRow}`).Value = toCellNumberOrText(payloadRow.clicks);
+        const writes = [
+          { address: `${salesColumn}${targetRow}`, value: toCellNumberOrText(payloadRow.sales), field: 'sales' },
+          { address: `${exposureColumn}${targetRow}`, value: toCellNumberOrText(payloadRow.exposure), field: 'exposure' },
+          { address: `${clicksColumn}${targetRow}`, value: toCellNumberOrText(payloadRow.clicks), field: 'clicks' },
+        ];
+        for (const write of writes) {
+          await writeCellValue(app, write.address, write.value);
+        }
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        for (const write of writes) {
+          const actual = normalizeCellValue(await cellText(app, write.address));
+          const expected = normalizeCellValue(write.value);
+          if (actual !== expected) {
+            failedWrites.push({
+              row: targetRow,
+              address: write.address,
+              field: write.field,
+              date: payloadRow.date || '',
+              name: payloadRow.name || '',
+              expected,
+              actual,
+            });
+          }
+        }
       }
 
       updated.push({
@@ -347,11 +396,30 @@ async function updateExistingRows(page, rows, { dryRun, layout }) {
       });
     }
 
-    return { updated, missing, duplicateKeys };
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    return { updated, missing, duplicateKeys, failedWrites };
 
-    async function cellText(wpsApp, address) {
+    async function writeCellValue(wpsApp, address, value) {
       const range = wpsApp.Range(address);
-      return String(await Promise.resolve(range.Text).catch(() => '') || '').trim();
+      range.Value = value;
+      await Promise.resolve(range.Value2 = value).catch(() => {});
+      await Promise.resolve(range.Formula = value).catch(() => {});
+    }
+
+    async function cellText(wpsApp, address, useMergeTopLeft = false) {
+      const range = wpsApp.Range(address);
+      const directText = String(await Promise.resolve(range.Text).catch(() => '') || '').trim();
+      if (directText || !useMergeTopLeft) {
+        return directText;
+      }
+
+      const mergeArea = await Promise.resolve(range.MergeArea).catch(() => null);
+      if (!mergeArea) {
+        return directText;
+      }
+
+      const mergedText = String(await Promise.resolve(mergeArea.Cells(1, 1).Text).catch(() => '') || '').trim();
+      return mergedText || directText;
     }
 
     function normalizeName(value) {
@@ -376,6 +444,14 @@ async function updateExistingRows(page, rows, { dryRun, layout }) {
       const text = String(value ?? '').trim().replace(/,/g, '');
       if (text === '') return '';
       return /^-?\\d+(\\.\\d+)?$/.test(text) ? Number(text) : text;
+    }
+
+    function normalizeCellValue(value) {
+      const text = String(value ?? '').trim().replace(/,/g, '');
+      if (/^-?\\d+(\\.\\d+)?$/.test(text)) {
+        return String(Number(text));
+      }
+      return text;
     }
 
     function columnName(column) {
@@ -417,6 +493,18 @@ function printUpdateResult(result) {
     console.log(`Duplicate date/name keys in sheet: ${result.duplicateKeys.length}`);
     for (const duplicate of result.duplicateKeys.slice(0, 10)) {
       console.log(`  duplicate: ${duplicate.key} rows ${duplicate.firstRow}, ${duplicate.duplicateRow}`);
+    }
+  }
+
+  if (result.failedWrites?.length) {
+    console.log(`Failed write verifications: ${result.failedWrites.length}`);
+    for (const failure of result.failedWrites.slice(0, 20)) {
+      console.log(
+        `  failed ${failure.address} (${failure.field}): ${failure.date} / ${failure.name}, expected=${failure.expected}, actual=${failure.actual || '(empty)'}`,
+      );
+    }
+    if (result.failedWrites.length > 20) {
+      console.log(`  ... ${result.failedWrites.length - 20} more failed writes`);
     }
   }
 }

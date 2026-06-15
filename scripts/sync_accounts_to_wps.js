@@ -7,7 +7,7 @@ const DEFAULT_ACCOUNTS_PATH = 'accounts.json';
 
 async function main() {
   const fileEnv = await loadEnvFile('.env').catch(() => ({}));
-  const baseEnv = { ...process.env, ...fileEnv };
+  const baseEnv = { ...fileEnv, ...process.env };
   const explicitAccountsPath = process.argv[2] || baseEnv.ACCOUNTS_CONFIG;
   const hasEnvAccounts = hasAccountEnvConfig(baseEnv);
   const accountsPath = explicitAccountsPath
@@ -74,6 +74,10 @@ function readAccountsFromEnv(env) {
     sourceExcel: env[`ACCOUNT_${index}_SOURCE_EXCEL`] || env[`ACCOUNT_${index}_SOURCE_EXCEL_PATH`],
     sourceExcelSpuColumn:
       env[`ACCOUNT_${index}_SOURCE_EXCEL_SPU_COLUMN`] || env[`ACCOUNT_${index}_SOURCE_SPU_COLUMN`],
+    sourceExcelNameColumn:
+      env[`ACCOUNT_${index}_SOURCE_EXCEL_NAME_COLUMN`] || env[`ACCOUNT_${index}_SOURCE_NAME_COLUMN`],
+    sourceExcelImageColumn:
+      env[`ACCOUNT_${index}_SOURCE_EXCEL_IMAGE_COLUMN`] || env[`ACCOUNT_${index}_SOURCE_IMAGE_COLUMN`],
     groupTitle:
       env[`ACCOUNT_${index}_GROUP_TITLE`] ||
       env[`ACCOUNT_${index}_WPS_GROUP_TITLE`] ||
@@ -135,6 +139,8 @@ function normalizeAccount(rawAccount, configDir, index, baseEnv = process.env) {
   const chromeProfile = resolveConfigPath(rawAccount.chromeProfile || rawAccount.cdpUserDataDir, configDir);
   const groupTitle = rawAccount.groupTitle || rawAccount.wpsGroupTitle || rawAccount.storeGroupTitle;
   const sourceExcelSpuColumn = rawAccount.sourceExcelSpuColumn || rawAccount.sourceSpuColumn;
+  const sourceExcelNameColumn = rawAccount.sourceExcelNameColumn || rawAccount.sourceNameColumn;
+  const sourceExcelImageColumn = rawAccount.sourceExcelImageColumn || rawAccount.sourceImageColumn;
 
   if (!sourceExcel) {
     throw new Error(`Account "${name}" is missing sourceExcel.`);
@@ -152,6 +158,8 @@ function normalizeAccount(rawAccount, configDir, index, baseEnv = process.env) {
     CDP_USER_DATA_DIR: chromeProfile,
     SOURCE_EXCEL_PATH: sourceExcel,
     SOURCE_EXCEL_SPU_COLUMN: sourceExcelSpuColumn,
+    SOURCE_EXCEL_NAME_COLUMN: sourceExcelNameColumn,
+    SOURCE_EXCEL_IMAGE_COLUMN: sourceExcelImageColumn,
     WPS_STORE_GROUP_TITLE: groupTitle,
     WPS_GROUP_TITLE: groupTitle,
     WPS_DOC_URL: rawAccount.wpsDocUrl,

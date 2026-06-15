@@ -33,6 +33,10 @@ def build_append_rows(data, source_rows):
     merged_rows = merge_rows_by_spu(data, source_rows)
     rows = []
     for row in merged_rows:
+        date = format_date(row.get("trafficDate") or "")
+        if not date:
+            continue
+
         if not has_collected_data(row):
             continue
 
@@ -40,7 +44,7 @@ def build_append_rows(data, source_rows):
         image_width, image_height = image_dimensions(image_path) if image_path else ("", "")
         rows.append(
             {
-                "date": format_date(row.get("trafficDate") or ""),
+                "date": date,
                 "name": row.get("name") or "",
                 "imagePath": str(image_path) if image_path else "",
                 "imageDataUrl": image_data_url(image_path) if image_path else "",

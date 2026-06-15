@@ -42,6 +42,32 @@ async function main() {
 
   let page = await attachToPage(sellerPageInfo, cdpOrigin);
   try {
+    const targetDates = readTrafficTargetDates(process.env);
+    console.log(`Target date(s): ${targetDates.join(', ')}`);
+
+    if (process.env.COLLECT_TRAFFIC_ONLY === '1') {
+      console.log('Traffic-only mode: collecting exposure and clicks only.');
+      const result = {
+        collectedAt: new Date().toISOString(),
+        url: await evaluate(page, 'location.href'),
+        title: await evaluate(page, 'document.title'),
+        pages: [],
+        records: [],
+        trafficAnalysis: await collectEuTrafficAnalysis(page, humanDelayConfig, targetDates),
+      };
+
+      await mkdir(dirname(OUTPUT_PATH), { recursive: true });
+      await writeFile(OUTPUT_PATH, `${JSON.stringify(result, null, 2)}\n`);
+      console.log(`Collected ${result.trafficAnalysis.records.length} traffic detail row(s).`);
+      console.log(`Saved traffic-only result: ${OUTPUT_PATH}`);
+      for (const record of result.trafficAnalysis.records) {
+        console.log(
+          `Traffic SPU ${record.spuId || 'unknown'}: ${record.date}, exposure ${record.exposure}, clicks ${record.clicks}, image ${record.imageStatus}`,
+        );
+      }
+      return;
+    }
+
     if (await isSalesManagePage(page)) {
       console.log('Step 1: already on sales management page; skipping sidebar navigation.');
     } else {
@@ -88,11 +114,25 @@ async function main() {
     const guideResult = await evaluate(page, buildDismissGuideScript());
     console.log(`Guide dialog result: ${guideResult}`);
 
-    console.log('Step 4: reading visible SPU IDs and total-row today sales');
-    const result = await collectAllSalesPages(page, humanDelayConfig);
+    console.log('Step 4: reading visible SPU IDs and date-specific sales');
+    const result = await collectAllSalesPages(page, humanDelayConfig, targetDates);
+
+    if (process.env.COLLECT_SALES_ONLY === '1') {
+      await mkdir(dirname(OUTPUT_PATH), { recursive: true });
+      await writeFile(OUTPUT_PATH, `${JSON.stringify(result, null, 2)}\n`);
+      console.log(`Collected ${result.records.length} sales row(s).`);
+      console.log(`Saved sales-only result: ${OUTPUT_PATH}`);
+      for (const record of result.records) {
+        const salesSummary = (record.salesByDate || [])
+          .map((item) => `${item.date}:${item.sales}`)
+          .join(', ');
+        console.log(`SPU ${record.spuId || 'unknown'}: sales ${salesSummary || record.todaySales || ''}`);
+      }
+      return;
+    }
 
     console.log('Step 5: collecting traffic analysis details for 欧区');
-    result.trafficAnalysis = await collectEuTrafficAnalysis(page, humanDelayConfig);
+    result.trafficAnalysis = await collectEuTrafficAnalysis(page, humanDelayConfig, targetDates);
 
     await mkdir(dirname(OUTPUT_PATH), { recursive: true });
     await writeFile(OUTPUT_PATH, `${JSON.stringify(result, null, 2)}\n`);
@@ -101,7 +141,10 @@ async function main() {
     console.log(`Collected ${result.trafficAnalysis.records.length} traffic detail row(s).`);
     console.log(`Saved: ${OUTPUT_PATH}`);
     for (const record of result.records) {
-      console.log(`SPU ${record.spuId || 'unknown'}: today sales ${record.todaySales}`);
+      const salesSummary = (record.salesByDate || [])
+        .map((item) => `${item.date}:${item.sales}`)
+        .join(', ');
+      console.log(`SPU ${record.spuId || 'unknown'}: sales ${salesSummary || record.todaySales || ''}`);
     }
     for (const record of result.trafficAnalysis.records) {
       console.log(
@@ -261,7 +304,7 @@ async function waitForSalesTableData(page, timeoutMs) {
   return false;
 }
 
-async function collectAllSalesPages(page, humanDelayConfig) {
+async function collectAllSalesPages(page, humanDelayConfig, targetDates) {
   const initialState = await getPaginationState(page);
   const pageNumbers = initialState.pageNumbers.length > 0 ? initialState.pageNumbers : [initialState.activePage || 1];
   const pages = [];
@@ -276,7 +319,7 @@ async function collectAllSalesPages(page, humanDelayConfig) {
 
     const state = await getPaginationState(page);
     const activePageNumber = state.activePage || pageNumber;
-    const pageRecords = await collectSalesRecordsOnCurrentPage(page, activePageNumber, humanDelayConfig);
+    const pageRecords = await collectSalesRecordsOnCurrentPage(page, activePageNumber, humanDelayConfig, targetDates);
 
     pages.push({
       pageNumber: activePageNumber,
@@ -296,23 +339,25 @@ async function collectAllSalesPages(page, humanDelayConfig) {
   };
 }
 
-async function collectSalesRecordsOnCurrentPage(page, pageNumber, humanDelayConfig) {
-  const count = Number(await evaluate(page, buildCountSalesRecordsScript()));
+async function collectSalesRecordsOnCurrentPage(page, pageNumber, humanDelayConfig, targetDates) {
+  const initialRecords = JSON.parse(await evaluate(page, buildCollectSalesRecordsScript()));
+  const count = initialRecords.length;
   const records = [];
   console.log(`Sales page ${pageNumber}: found ${count} product sales row(s).`);
 
-  for (let index = 0; index < count; index += 1) {
+  for (let index = 0; index < initialRecords.length; index += 1) {
     await humanPause(`reading sales product ${index + 1}/${count} on page ${pageNumber}`, humanDelayConfig);
-    const rawRecord = await evaluate(page, buildCollectSalesRecordScript(index));
-    const record = JSON.parse(rawRecord);
-    if (!record) {
-      console.log(`Sales product ${index + 1}/${count} on page ${pageNumber}: skipped because row disappeared.`);
+    const record = initialRecords[index];
+    if (!record?.spuId) {
+      console.log(`Sales product ${index + 1}/${count} on page ${pageNumber}: skipped because row snapshot is incomplete.`);
       continue;
     }
 
+    record.salesByDate = await collectSalesByDateForRecord(page, index, record, targetDates, humanDelayConfig);
     records.push(record);
     console.log(
-      `Read sales product ${index + 1}/${count} on page ${pageNumber}: SPU ${record.spuId || 'unknown'}, today sales ${record.todaySales}`,
+      `Read sales product ${index + 1}/${count} on page ${pageNumber}: SPU ${record.spuId || 'unknown'}, ` +
+        `sales ${record.salesByDate.map((item) => `${item.date}:${item.sales}`).join(', ')}`,
     );
     await humanPause(`finished sales product ${index + 1}/${count} on page ${pageNumber}`, humanDelayConfig);
   }
@@ -320,8 +365,159 @@ async function collectSalesRecordsOnCurrentPage(page, pageNumber, humanDelayConf
   return records;
 }
 
-async function collectEuTrafficAnalysis(page, humanDelayConfig) {
-  const targetDates = readTrafficTargetDates(process.env);
+async function collectSalesByDateForRecord(page, index, record, targetDates, humanDelayConfig) {
+  if (!targetDates.length) {
+    return [];
+  }
+
+  await ensureSalesTrendDialogClosed(page);
+
+  if (!record.hasSalesTrend) {
+    console.log(`Sales product ${index + 1}: no 销售趋势 button; filling requested date sales with 0.`);
+    return targetDates.map((date) => ({ date, sales: '0', source: 'no-sales-trend' }));
+  }
+
+  let trendReady = false;
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    await ensureSalesTrendDialogClosed(page);
+    await humanPause(`opening sales trend for product ${index + 1} (attempt ${attempt})`, humanDelayConfig);
+    const opened = await openSalesTrendDialog(page, record);
+    if (!opened) {
+      console.log(`Sales product ${index + 1}: 销售趋势 button was expected but could not be clicked (attempt ${attempt}).`);
+      continue;
+    }
+
+    trendReady = await waitForSalesTrendDialog(page, 60000);
+    if (trendReady) {
+      break;
+    }
+
+    console.log(`Sales product ${index + 1}: 销售趋势弹窗没有在限定时间内出现 (attempt ${attempt}).`);
+    await forceCloseSalesTrendDialog(page);
+  }
+
+  if (!trendReady) {
+    throw new Error(`SPU ${record.spuId} 有销售趋势按钮，但连续 3 次无法打开或识别销售趋势弹窗；已停止以避免写入错误销量。`);
+  }
+  const salesByDate = [];
+  for (const targetDate of targetDates) {
+    await humanPause(`hovering sales trend ${targetDate}`, humanDelayConfig);
+    const recordForDate = await readSalesTrendPoint(page, targetDate);
+    salesByDate.push(recordForDate || { date: targetDate, sales: '0', source: 'sales-trend-missing' });
+  }
+
+  await humanPause(`closing sales trend for product ${index + 1}`, humanDelayConfig);
+  const closed = await closeSalesTrendDialog(page);
+  if (!closed) {
+    console.log(`Sales product ${index + 1}: 销售趋势弹窗没有正常关闭，使用 Escape 兜底。`);
+    await forceCloseSalesTrendDialog(page);
+  }
+  await moveMouseAwayFromSalesTrend(page);
+  return salesByDate;
+}
+
+async function openSalesTrendDialog(page, record) {
+  let point = await evaluate(page, buildSalesTrendPointScript(record.spuId));
+  if (!point?.x || !point?.y) {
+    await evaluate(page, buildScrollSalesRecordIntoViewScript(record.spuId));
+    await sleep(500);
+    point = await evaluate(page, buildSalesTrendPointScript(record.spuId));
+  }
+  if (!point?.x || !point?.y) {
+    return false;
+  }
+  await page.click(point.x, point.y);
+  return true;
+}
+
+async function waitForSalesTrendDialog(page, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const ready = await evaluate(page, buildHasSalesTrendDialogScript());
+    if (ready) {
+      return true;
+    }
+    await sleep(POLL_INTERVAL_MS);
+  }
+  return false;
+}
+
+async function readSalesTrendPoint(page, targetDate) {
+  const point = await evaluate(page, buildSalesTrendHoverPointScript(targetDate));
+  if (!point?.x || !point?.y) {
+    console.log(`Sales trend: unable to estimate hover point for ${targetDate}.`);
+    return null;
+  }
+
+  await page.send('Input.dispatchMouseEvent', {
+    type: 'mouseMoved',
+    x: point.x,
+    y: point.y,
+    button: 'none',
+    buttons: 0,
+  });
+  await sleep(700);
+  const rawRecord = await evaluate(page, buildCollectSalesTrendTooltipScript(targetDate));
+  const record = JSON.parse(rawRecord || 'null');
+  if (!record) {
+    console.log(`Sales trend: tooltip for ${targetDate} was not readable after hover.`);
+    return null;
+  }
+  return record;
+}
+
+async function closeSalesTrendDialog(page) {
+  const point = await evaluate(page, buildCloseSalesTrendPointScript());
+  if (point?.x && point?.y) {
+    await page.click(point.x, point.y);
+    return waitForSalesTrendDialogClosed(page, 10000);
+  }
+  return forceCloseSalesTrendDialog(page);
+}
+
+async function waitForSalesTrendDialogClosed(page, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const closed = await evaluate(page, buildIsSalesTrendDialogClosedScript());
+    if (closed) {
+      return true;
+    }
+    await sleep(POLL_INTERVAL_MS);
+  }
+  return false;
+}
+
+async function forceCloseSalesTrendDialog(page) {
+  await evaluate(page, 'document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }))');
+  await page.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
+  await page.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
+  return waitForSalesTrendDialogClosed(page, 10000);
+}
+
+async function ensureSalesTrendDialogClosed(page) {
+  const closed = await evaluate(page, buildIsSalesTrendDialogClosedScript());
+  if (closed) {
+    await moveMouseAwayFromSalesTrend(page);
+    return true;
+  }
+
+  await forceCloseSalesTrendDialog(page);
+  await moveMouseAwayFromSalesTrend(page);
+  return evaluate(page, buildIsSalesTrendDialogClosedScript());
+}
+
+async function moveMouseAwayFromSalesTrend(page) {
+  await page.send('Input.dispatchMouseEvent', {
+    type: 'mouseMoved',
+    x: 24,
+    y: 24,
+    button: 'none',
+    buttons: 0,
+  });
+  await sleep(300);
+}
+
+async function collectEuTrafficAnalysis(page, humanDelayConfig, targetDates = readTrafficTargetDates(process.env)) {
   const trafficDateRange = process.env.TRAFFIC_DATE_RANGE || chooseTrafficDateRange(targetDates);
   await openTrafficAnalysisPage(page, humanDelayConfig);
   await selectEuRegion(page, humanDelayConfig);
@@ -442,7 +638,6 @@ async function selectEuRegion(page, humanDelayConfig) {
 }
 
 async function selectTrafficDateRange(page, humanDelayConfig, dateRange) {
-  await waitForTrafficDateControls(page, 60000);
   const alreadyHasRows = await evaluate(page, 'Boolean(document.body && document.body.innerText.includes("查看详情"))');
   const activeDate = await evaluate(page, buildActiveTrafficDateScript());
   if (alreadyHasRows && activeDate === dateRange) {
@@ -450,6 +645,7 @@ async function selectTrafficDateRange(page, humanDelayConfig, dateRange) {
     return;
   }
 
+  await waitForTrafficDateControls(page, 60000);
   console.log(`Step 5.4: selecting traffic date range: ${dateRange}`);
   await humanPause(`selecting traffic date range ${dateRange}`, humanDelayConfig);
   await clickPoint(page, buildTrafficDatePointScript(dateRange));
@@ -638,15 +834,14 @@ async function collectTrafficDetailsOnCurrentPage(page, pageNumber, humanDelayCo
   const rows = JSON.parse(await evaluate(page, buildCollectTrafficListRowsScript()));
   const count = rows.length;
   const records = [];
+  const detailOpenRetries = Number.parseInt(process.env.TRAFFIC_DETAIL_OPEN_RETRIES || '3', 10);
   console.log(`Traffic page ${pageNumber}: found ${count} product detail row(s).`);
 
   for (let index = 0; index < rows.length; index += 1) {
     const row = rows[index];
     await dismissFeedbackPopup(page);
     console.log(`Opening traffic detail ${index + 1}/${count} on page ${pageNumber}: SPU ${row.spuId || 'unknown'}...`);
-    await humanPause(`opening traffic detail ${index + 1}`, humanDelayConfig);
-    await clickTrafficDetailButton(page, index);
-    await waitForTrafficDetailPage(page, 60000);
+    await openTrafficDetailWithRetry(page, index, row, count, humanDelayConfig, detailOpenRetries);
     const detailDataReady = await waitForTrafficDetailData(page, 60000);
     if (!detailDataReady) {
       console.log(`Traffic detail ${index + 1}/${count}: detail shell opened, but no dated data row appeared before timeout.`);
@@ -655,18 +850,21 @@ async function collectTrafficDetailsOnCurrentPage(page, pageNumber, humanDelayCo
     await humanPause(`reading traffic detail ${index + 1}`, humanDelayConfig);
     const rawRecord = await evaluate(page, buildCollectTrafficDetailScript());
     const detailRecord = JSON.parse(rawRecord);
-    const selectedRecords = selectTrafficRecordsForTargetDates(detailRecord, targetDates);
+    const normalizedDetailRecord = {
+      ...detailRecord,
+      productTitle: row.productTitle || detailRecord.productTitle,
+      spuId: row.spuId || detailRecord.spuId,
+      imageSrc: row.imageSrc || detailRecord.imageSrc,
+      imageAlt: row.imageAlt || detailRecord.imageAlt,
+      imageStatus: row.imageStatus || detailRecord.imageStatus,
+      imageRect: row.imageRect || detailRecord.imageRect,
+    };
+    const selectedRecords = selectTrafficRecordsForTargetDates(normalizedDetailRecord, targetDates);
     for (const record of selectedRecords) {
       records.push({
         ...record,
-        productTitle: row.productTitle || record.productTitle,
-        spuId: row.spuId || record.spuId,
         listExposure: row.exposure,
         listClicks: row.clicks,
-        imageSrc: row.imageSrc || record.imageSrc,
-        imageAlt: row.imageAlt || record.imageAlt,
-        imageStatus: row.imageStatus || record.imageStatus,
-        imageRect: row.imageRect || record.imageRect,
         pageNumber,
         rowIndex: index + 1,
         source: 'cdp-traffic-detail',
@@ -688,6 +886,43 @@ async function collectTrafficDetailsOnCurrentPage(page, pageNumber, humanDelayCo
   return records;
 }
 
+async function openTrafficDetailWithRetry(page, index, row, count, humanDelayConfig, maxAttempts) {
+  const attempts = Math.max(1, maxAttempts || 1);
+  let lastError = null;
+
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    if (attempt > 1) {
+      console.log(
+        `Retrying traffic detail ${index + 1}/${count} for SPU ${row.spuId || 'unknown'} ` +
+          `(attempt ${attempt}/${attempts})...`,
+      );
+    }
+
+    await ensureTrafficDetailClosed(page);
+    await waitForTrafficListPage(page, 60000);
+    await dismissFeedbackPopup(page);
+    await humanPause(`opening traffic detail ${index + 1}${attempt > 1 ? ` retry ${attempt}` : ''}`, humanDelayConfig);
+
+    try {
+      await clickTrafficDetailButton(page, index, row.spuId);
+      await waitForTrafficDetailPage(page, 60000);
+      if (row.spuId) {
+        await waitForTrafficDetailForSpu(page, row.spuId, 20000);
+      }
+      return true;
+    } catch (error) {
+      lastError = error;
+      console.log(
+        `Traffic detail ${index + 1}/${count} did not open as expected: ${error.message || error}. ` +
+          (attempt < attempts ? 'Closing it and retrying.' : 'No retries left.'),
+      );
+      await ensureTrafficDetailClosed(page);
+    }
+  }
+
+  throw lastError || new Error(`未能打开第 ${index + 1} 个商品的流量详情`);
+}
+
 function selectTrafficRecordsForTargetDates(detailRecord, targetDates) {
   const sourceRows = Array.isArray(detailRecord?.detailRows) && detailRecord.detailRows.length > 0
     ? detailRecord.detailRows
@@ -697,22 +932,35 @@ function selectTrafficRecordsForTargetDates(detailRecord, targetDates) {
   for (const targetDate of targetDates) {
     const exact = sourceRows.find((row) => row.date === targetDate);
     const chosen = exact || normalizeContinuousZeroTrafficRow(sourceRows[0], targetDate);
+    const resolved = chosen || zeroTrafficRowForMissingDate(targetDate);
     if (!chosen) {
-      console.log(`Traffic detail SPU ${detailRecord?.spuId || 'unknown'}: target date ${targetDate} not found.`);
-      continue;
+      console.log(
+        `Traffic detail SPU ${detailRecord?.spuId || 'unknown'}: target date ${targetDate} not found; ` +
+          'using exposure 0 and clicks 0.',
+      );
     }
 
     records.push({
       ...detailRecord,
-      ...chosen,
+      ...resolved,
       detailRows: undefined,
-      date: chosen.date,
-      exposure: chosen.exposure,
-      clicks: chosen.clicks,
+      date: resolved.date,
+      exposure: resolved.exposure,
+      clicks: resolved.clicks,
     });
   }
 
   return records;
+}
+
+function zeroTrafficRowForMissingDate(targetDate) {
+  return {
+    date: targetDate,
+    exposure: '0',
+    clicks: '0',
+    source: 'missing-target-date-zero-filled',
+    dateWasZeroFilled: true,
+  };
 }
 
 function normalizeContinuousZeroTrafficRow(row, targetDate) {
@@ -805,6 +1053,20 @@ async function waitForTrafficDetailPage(page, timeoutMs) {
   throw new Error('点击查看详情后，没有在限定时间内看到商品数据分析详情页');
 }
 
+async function waitForTrafficDetailForSpu(page, spuId, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const visibleSpuId = await evaluate(page, buildTrafficDetailSpuScript());
+    if (String(visibleSpuId || '') === String(spuId || '')) {
+      return true;
+    }
+
+    await sleep(POLL_INTERVAL_MS);
+  }
+
+  throw new Error(`商品数据分析详情页没有切换到 SPU ${spuId}`);
+}
+
 async function waitForTrafficDetailData(page, timeoutMs) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -829,11 +1091,23 @@ async function closeTrafficDetail(page) {
   await page.click(point.x, point.y);
 }
 
-async function clickTrafficDetailButton(page, index) {
-  const result = await evaluate(page, buildClickTrafficDetailButtonScript(index));
-  if (!result?.clicked) {
-    throw new Error(result?.error || `未能点击第 ${index + 1} 个查看详情按钮`);
+async function ensureTrafficDetailClosed(page) {
+  const detailStillOpen = await evaluate(page, buildIsTrafficDetailVisibleScript());
+  if (!detailStillOpen) {
+    return true;
   }
+
+  await closeTrafficDetail(page);
+  return waitForTrafficDetailClosed(page, 60000);
+}
+
+async function clickTrafficDetailButton(page, index, spuId = '') {
+  const result = await evaluate(page, buildTrafficDetailButtonPointForSpuScript(index, spuId));
+  if (!result?.point) {
+    throw new Error(result?.error || `未能定位第 ${index + 1} 个查看详情按钮`);
+  }
+
+  await page.click(result.point.x, result.point.y);
 }
 
 async function waitForTrafficDetailClosed(page, timeoutMs) {
@@ -982,6 +1256,217 @@ function buildCollectSalesRecordScript(index) {
   }).replaceAll('__INDEX__', String(index));
 }
 
+function buildCollectSalesRecordsScript() {
+  return browserFunction(() => JSON.stringify(collectVisibleSkuSalesRowsByCoordinates()));
+}
+
+function buildSalesTrendPointScript(spuId) {
+  return browserFunction((targetSpuId) => {
+    let records = collectVisibleSkuSalesRowsByCoordinates({ scrollTrendPointSpuId: targetSpuId });
+    let record = records.find((item) => item.spuId === targetSpuId);
+    if (record?.salesTrendPoint) {
+      return record.salesTrendPoint;
+    }
+
+    const textItem = visibleTextItems()
+      .find((item) => item.text.includes(targetSpuId) && /SPU\s*[:：]/i.test(item.text));
+    if (textItem) {
+      textItem.element.scrollIntoView({ block: 'center', inline: 'nearest' });
+      records = collectVisibleSkuSalesRowsByCoordinates({ scrollTrendPointSpuId: targetSpuId });
+      record = records.find((item) => item.spuId === targetSpuId);
+    }
+
+    return record?.salesTrendPoint || null;
+  }, spuId);
+}
+
+function buildScrollSalesRecordIntoViewScript(spuId) {
+  return browserFunction((targetSpuId) => {
+    const item = visibleTextItems()
+      .find((textItem) => textItem.text.includes(targetSpuId) && /SPU\s*[:：]/i.test(textItem.text));
+    if (!item) {
+      return false;
+    }
+
+    item.element.scrollIntoView({ block: 'center', inline: 'nearest' });
+    return true;
+  }, spuId);
+}
+
+function buildSalesTrendHoverPointScript(targetDate) {
+  return browserFunction((wantedDate) => {
+    const modal = findSalesTrendModal();
+    if (!modal) {
+      return null;
+    }
+
+    const modalRect = modal.getBoundingClientRect();
+    const targetTime = new Date(`${wantedDate}T00:00:00+08:00`).getTime();
+    if (!Number.isFinite(targetTime)) {
+      return null;
+    }
+
+    const dateItems = visibleTextItems()
+      .filter((item) => modal.contains(item.element))
+      .map((item) => ({ ...item, date: parseAxisDate(item.text, wantedDate) }))
+      .filter((item) => item.date)
+      .sort((a, b) => a.date.time - b.date.time);
+    if (dateItems.length < 2) {
+      return estimatePointFromCanvas();
+    }
+
+    let left = dateItems[0];
+    let right = dateItems[dateItems.length - 1];
+    for (let index = 0; index < dateItems.length - 1; index += 1) {
+      if (dateItems[index].date.time <= targetTime && targetTime <= dateItems[index + 1].date.time) {
+        left = dateItems[index];
+        right = dateItems[index + 1];
+        break;
+      }
+    }
+
+    const leftX = centerX(left.rect);
+    const rightX = centerX(right.rect);
+    const ratio = right.date.time === left.date.time ? 0 : (targetTime - left.date.time) / (right.date.time - left.date.time);
+    const x = leftX + (rightX - leftX) * ratio;
+
+    const axisTop = Math.min(...dateItems.map((item) => item.rect.top));
+    const chartTop = modalRect.top + modalRect.height * 0.24;
+    const y = Math.max(chartTop, axisTop - 130);
+    return { x, y };
+
+    function estimatePointFromCanvas() {
+      const canvas = salesTrendCanvasesForModal(modal)
+        .map((element) => ({ element, rect: element.getBoundingClientRect() }))
+        .filter((item) => item.rect.width > 500 && item.rect.height > 200)
+        .sort((a, b) => b.rect.width * b.rect.height - a.rect.width * a.rect.height)[0];
+      if (!canvas) {
+        return null;
+      }
+
+      const now = new Date();
+      const end = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1);
+      const start = new Date(end.getFullYear(), end.getMonth(), end.getDate() - 30);
+      const target = new Date(`${wantedDate}T00:00:00`);
+      const startTime = start.getTime();
+      const endTime = end.getTime();
+      const targetTime = target.getTime();
+      if (!Number.isFinite(targetTime) || targetTime < startTime || targetTime > endTime) {
+        return null;
+      }
+
+      const ratio = (targetTime - startTime) / (endTime - startTime);
+      const plotLeft = canvas.rect.left + canvas.rect.width * 0.08;
+      const plotRight = canvas.rect.left + canvas.rect.width * 0.75;
+      const x = plotLeft + (plotRight - plotLeft) * ratio;
+      const y = canvas.rect.top + canvas.rect.height * 0.55;
+      return { x, y };
+    }
+
+    function parseAxisDate(text, referenceDate) {
+      const value = String(text || '').trim();
+      let match = value.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+      if (match) {
+        return datePartsToAxisDate(match[1], match[2], match[3]);
+      }
+      match = value.match(/^(\d{1,2})-(\d{1,2})$/);
+      if (match) {
+        return datePartsToAxisDate(referenceDate.slice(0, 4), match[1], match[2]);
+      }
+      return null;
+    }
+
+    function datePartsToAxisDate(year, month, day) {
+      const normalized = `${Number(year).toString().padStart(4, '0')}-${Number(month).toString().padStart(2, '0')}-${Number(day).toString().padStart(2, '0')}`;
+      return {
+        value: normalized,
+        time: new Date(`${normalized}T00:00:00+08:00`).getTime(),
+      };
+    }
+  }, targetDate);
+}
+
+function buildCollectSalesTrendTooltipScript(targetDate) {
+  return browserFunction((wantedDate) => {
+    const modal = findSalesTrendModal();
+    if (!modal) {
+      return JSON.stringify(null);
+    }
+
+    const escapedDate = wantedDate.replaceAll('-', '\\-');
+    const tooltipPattern = new RegExp(`${escapedDate}[\\s\\S]{0,80}?销量\\s*(\\d+(?:\\.\\d+)?)`);
+    const dateText = wantedDate.replace(/^\\d{4}-/, '');
+    const escapedShortDate = dateText.replaceAll('-', '\\-');
+    const shortTooltipPattern = new RegExp(`${escapedShortDate}[\\s\\S]{0,80}?销量\\s*(\\d+(?:\\.\\d+)?)`);
+
+    const tooltipCandidates = visibleElements()
+      .map((element) => ({ element, rect: element.getBoundingClientRect(), text: normalizedText(element) }))
+      .filter((item) => item.rect.width > 20 && item.rect.height > 10)
+      .filter((item) => item.rect.width < 380 && item.rect.height < 220)
+      .filter((item) => item.text.includes('销量'))
+      .filter((item) => item.text.includes(wantedDate) || item.text.includes(dateText))
+      .sort((a, b) => area(a.element) - area(b.element));
+
+    let match = null;
+    for (const item of tooltipCandidates) {
+      match = item.text.match(tooltipPattern) || item.text.match(shortTooltipPattern);
+      if (match) {
+        break;
+      }
+    }
+
+    return JSON.stringify(match
+      ? { date: wantedDate, sales: match[1], source: 'sales-trend-tooltip' }
+      : null);
+  }, targetDate);
+}
+
+function buildHasSalesTrendDialogScript() {
+  return browserFunction(() => {
+    const modal = findSalesTrendModal();
+    if (!modal) {
+      return false;
+    }
+
+    return salesTrendCanvasesForModal(modal).some((canvas) => {
+      const rect = canvas.getBoundingClientRect();
+      return rect.width > 500 && rect.height > 200;
+    });
+  });
+}
+
+function buildCloseSalesTrendPointScript() {
+  return browserFunction(() => {
+    const modal = findSalesTrendModal();
+    if (!modal) {
+      return null;
+    }
+
+    const candidates = visibleElements()
+      .filter((element) => modal.contains(element))
+      .filter((element) => {
+        const className = String(element.className || '');
+        const text = normalizedText(element);
+        return className.includes('MDL_iconWrapper')
+          || text === '我知道了'
+          || text === '×'
+          || text === 'X'
+          || element.getAttribute('aria-label') === 'Close';
+      })
+      .map((element) => ({ element, rect: element.getBoundingClientRect(), text: normalizedText(element) }))
+      .filter((item) => item.rect.width > 0 && item.rect.height > 0);
+    const iconClose = candidates.find((item) => String(item.element.className || '').includes('MDL_iconWrapper'));
+    const xClose = candidates.find((item) => item.text === '×' || item.text === 'X');
+    const confirm = candidates.find((item) => item.text === '我知道了');
+    const close = iconClose || xClose || confirm || candidates.sort((a, b) => b.rect.right - a.rect.right || a.rect.top - b.rect.top)[0];
+    return close ? viewportPointForElement(close.element) : null;
+  });
+}
+
+function buildIsSalesTrendDialogClosedScript() {
+  return browserFunction(() => !findSalesTrendModal());
+}
+
 function buildGetPaginationStateScript() {
   return browserFunction(() => {
     const items = visibleElements().map((element) => ({
@@ -1081,8 +1566,8 @@ function buildTrafficDatePointScript(dateText) {
     const candidates = visibleElements()
       .filter((element) => normalizedText(element) === '__DATE_TEXT__')
       .map((element) => ({ element, rect: element.getBoundingClientRect() }))
-      .filter((item) => item.rect.left > window.innerWidth * 0.55)
-      .filter((item) => item.rect.top > 180)
+      .filter((item) => item.rect.width > 0 && item.rect.height > 0)
+      .filter((item) => item.rect.top > 80)
       .sort((a, b) => area(a.element) - area(b.element));
 
     if (candidates.length === 0) {
@@ -1105,8 +1590,8 @@ function buildActiveTrafficDateScript() {
         color: window.getComputedStyle(element).color,
       }))
       .filter((item) => dateTexts.includes(item.text))
-      .filter((item) => item.rect.left > window.innerWidth * 0.55)
-      .filter((item) => item.rect.top > 180);
+      .filter((item) => item.rect.width > 0 && item.rect.height > 0)
+      .filter((item) => item.rect.top > 80);
 
     const active = candidates.find((item) => /active|selected|checked/i.test(item.className));
     if (active) {
@@ -1120,10 +1605,11 @@ function buildActiveTrafficDateScript() {
 
 function buildHasTrafficDateControlsScript() {
   return browserFunction(() => {
+    const dateTexts = new Set(['昨日', '今日', '本周', '本月', '近7日', '近30日']);
     return Boolean(
       visibleElements()
         .map((element) => ({ element, text: normalizedText(element), rect: element.getBoundingClientRect() }))
-        .find((item) => item.text === '昨日' && item.rect.left > window.innerWidth * 0.55 && item.rect.top > 120),
+        .find((item) => dateTexts.has(item.text) && item.rect.width > 0 && item.rect.height > 0 && item.rect.top > 80),
     );
   });
 }
@@ -1151,18 +1637,58 @@ function buildTrafficDetailButtonPointScript(index) {
   }).replaceAll('__DETAIL_INDEX__', String(index));
 }
 
-function buildClickTrafficDetailButtonScript(index) {
-  return browserFunction(() => {
+function buildClickTrafficDetailButtonScript(index, spuId = '') {
+  return browserFunction((wantedSpuId) => {
     const buttons = trafficDetailButtons();
-    const target = buttons[__DETAIL_INDEX__];
+    const rows = trafficDetailRows();
+    const targetRow = wantedSpuId
+      ? rows.find((row) => String(row.spuId || '') === String(wantedSpuId))
+      : null;
+    const target = targetRow?.element || buttons[__DETAIL_INDEX__];
     if (!target) {
-      return { clicked: false, error: `未找到第 ${__DETAIL_INDEX__ + 1} 个查看详情按钮` };
+      return {
+        clicked: false,
+        error: wantedSpuId
+          ? `未找到 SPU ${wantedSpuId} 对应的查看详情按钮`
+          : `未找到第 ${__DETAIL_INDEX__ + 1} 个查看详情按钮`,
+      };
     }
 
     target.scrollIntoView({ block: 'center', inline: 'center' });
     target.click();
-    return { clicked: true };
-  }).replaceAll('__DETAIL_INDEX__', String(index));
+    return {
+      clicked: true,
+      method: targetRow ? 'spu-row' : 'index-fallback',
+      spuId: targetRow?.spuId || '',
+    };
+  }, spuId).replaceAll('__DETAIL_INDEX__', String(index));
+}
+
+function buildTrafficDetailButtonPointForSpuScript(index, spuId = '') {
+  return browserFunction((wantedSpuId) => {
+    const buttons = trafficDetailButtons();
+    const rows = trafficDetailRows();
+    const targetRow = wantedSpuId
+      ? rows.find((row) => String(row.spuId || '') === String(wantedSpuId))
+      : null;
+    const target = targetRow?.element || buttons[__DETAIL_INDEX__];
+    if (!target) {
+      return {
+        point: null,
+        error: wantedSpuId
+          ? `未找到 SPU ${wantedSpuId} 对应的查看详情按钮`
+          : `未找到第 ${__DETAIL_INDEX__ + 1} 个查看详情按钮`,
+      };
+    }
+
+    target.scrollIntoView({ block: 'center', inline: 'center' });
+    const point = viewportPointForElement(target);
+    return {
+      point,
+      method: targetRow ? 'spu-row-point' : 'index-point-fallback',
+      spuId: targetRow?.spuId || '',
+    };
+  }, spuId).replaceAll('__DETAIL_INDEX__', String(index));
 }
 
 function buildCollectTrafficDetailScript() {
@@ -1374,6 +1900,31 @@ function buildCollectTrafficDetailScript() {
   });
 }
 
+function buildTrafficDetailSpuScript() {
+  return browserFunction(() => {
+    const lines = (document.body?.innerText || '')
+      .split(/\n+/)
+      .map((line) => line.trim())
+      .filter(Boolean);
+    const detailIndex = lines.findIndex((line) => line === '商品数据分析');
+    const searchLines = detailIndex >= 0 ? lines.slice(detailIndex) : lines;
+
+    for (let index = 0; index < searchLines.length; index += 1) {
+      const line = searchLines[index];
+      const inlineMatch = line.match(/SPU\s*(?:ID)?\s*[：:]\s*(\d+)/i);
+      if (inlineMatch) {
+        return inlineMatch[1];
+      }
+
+      if (/^SPU\s*(?:ID)?\s*[：:]?$/i.test(line) && /^\d+$/.test(searchLines[index + 1] || '')) {
+        return searchLines[index + 1];
+      }
+    }
+
+    return '';
+  });
+}
+
 function buildHasTrafficDetailDataScript() {
   return browserFunction(() => {
     const lines = (document.body?.innerText || '')
@@ -1515,11 +2066,11 @@ function buildDismissFeedbackPopupScript() {
   });
 }
 
-function browserFunction(fn) {
+function browserFunction(fn, ...args) {
   return `
     (() => {
       ${browserHelpers()}
-      return (${fn.toString()})();
+      return (${fn.toString()})(...${JSON.stringify(args)});
     })();
   `;
 }
@@ -1586,7 +2137,47 @@ function browserHelpers() {
       };
     }
 
-    function collectVisibleSkuSalesRowsByCoordinates() {
+    function findSalesTrendModal() {
+      const candidates = visibleElements()
+        .filter((element) => {
+          const text = normalizedText(element);
+          return text.includes('销售趋势') && (
+            text.includes('我知道了') ||
+            text.includes('含已售罄SKU') ||
+            text.includes('分SKU展示') ||
+            text.includes('销量')
+          );
+        })
+        .map((element) => ({ element, rect: element.getBoundingClientRect(), text: normalizedText(element) }))
+        .filter((item) => {
+          const rect = item.rect;
+          return rect.width > 400
+            && rect.height > 250
+            && rect.width < window.innerWidth * 0.95
+            && rect.height < window.innerHeight * 0.9
+            && rect.left > 0
+            && rect.top > 20
+            && rect.right < window.innerWidth
+            && rect.bottom < window.innerHeight;
+        })
+        .sort((a, b) => area(a.element) - area(b.element));
+      return candidates[0]?.element || null;
+    }
+
+    function salesTrendCanvasesForModal(modal) {
+      const modalRect = modal.getBoundingClientRect();
+      return Array.from(document.querySelectorAll('canvas')).filter((canvas) => {
+        const rect = canvas.getBoundingClientRect();
+        return rect.width > 0
+          && rect.height > 0
+          && rect.left >= modalRect.left - 8
+          && rect.top >= modalRect.top - 8
+          && rect.right <= modalRect.right + 8
+          && rect.bottom <= modalRect.bottom + 8;
+      });
+    }
+
+    function collectVisibleSkuSalesRowsByCoordinates(options = {}) {
       const textItems = visibleTextItems();
       const todayHeader = findHeaderItem(textItems, '今日');
       if (!todayHeader) {
@@ -1615,6 +2206,7 @@ function browserHelpers() {
       }
 
       const records = [];
+      let recordIndex = 0;
       let previousTotalY = -Infinity;
       for (const totalItem of totalItems) {
         const totalY = centerY(totalItem.rect);
@@ -1641,22 +2233,58 @@ function browserHelpers() {
         const skuIds = Array.from(new Set(groupedSkus.map((skuItem) => skuItem.skuMatch[1])));
         const skcCargoNos = Array.from(new Set(groupedSkcCargoItems.map((skcCargoItem) => skcCargoItem.skcCargoMatch[1].trim())));
         const uniqueSpuItems = uniqueItemsBy(groupedSpuItems, (spuItem) => spuItem.spuMatch[1]);
-        for (const spuItem of uniqueSpuItems) {
+        for (let spuIndex = 0; spuIndex < uniqueSpuItems.length; spuIndex += 1) {
+          const spuItem = uniqueSpuItems[spuIndex];
+          const salesTrendItem = findSalesTrendItemForSpu(textItems, previousTotalY, totalY, uniqueSpuItems, spuIndex);
+          const spuId = spuItem.spuMatch[1];
+          const shouldScrollTrendPoint = options.scrollTrendPointSpuId === spuId;
           records.push({
-            spuId: spuItem.spuMatch[1],
+            spuId,
             skuIds,
             skcCargoNos,
             todaySales: todayCell?.text || '',
             productText: buildNearbyText(textItems, spuItem.rect),
             totalRowText,
+            hasSalesTrend: Boolean(salesTrendItem),
+            salesTrendPoint: salesTrendItem
+              ? (shouldScrollTrendPoint ? viewportPointForElement(salesTrendItem.element) : viewportPointForVisibleElement(salesTrendItem.element))
+              : null,
             source: 'cdp-coordinate-total-row',
           });
+          recordIndex += 1;
         }
 
         previousTotalY = totalY;
       }
 
       return records;
+    }
+
+    function findSalesTrendItemForSpu(textItems, groupTopY, groupBottomY, spuItems, spuIndex) {
+      const current = spuItems[spuIndex];
+      const currentY = centerY(current.rect);
+      const previous = spuItems[spuIndex - 1];
+      const next = spuItems[spuIndex + 1];
+      const rowTopY = previous ? (centerY(previous.rect) + currentY) / 2 : groupTopY;
+      const rowBottomY = next ? (currentY + centerY(next.rect)) / 2 : groupBottomY;
+
+      const candidates = textItems
+        .filter((item) => item.text === '销售趋势')
+        .filter((item) => {
+          const y = centerY(item.rect);
+          return y > rowTopY && y < rowBottomY;
+        })
+        .sort((a, b) => b.rect.left - a.rect.left || a.rect.top - b.rect.top);
+      return candidates[0] || null;
+    }
+
+    function viewportPointForVisibleElement(element) {
+      const clickable = element.closest('a,button,[role="button"]') || element;
+      const rect = clickable.getBoundingClientRect();
+      return {
+        x: rect.left + rect.width / 2,
+        y: rect.top + rect.height / 2,
+      };
     }
 
     function uniqueItemsBy(items, keyFn) {

@@ -81,6 +81,8 @@ def read_source_excel(path):
     workbook = load_workbook(path, data_only=False)
     sheet = workbook.active
     spu_column = source_spu_column()
+    name_column = source_name_column()
+    image_column = source_image_column()
     source_rows = []
     seen_spus = set()
 
@@ -90,8 +92,8 @@ def read_source_excel(path):
             continue
 
         seen_spus.add(spu_id)
-        name = sheet.cell(row_index, 2).value or ""
-        image_id = extract_dispimg_id(sheet.cell(row_index, 3).value)
+        name = sheet.cell(row_index, name_column).value or ""
+        image_id = extract_dispimg_id(sheet.cell(row_index, image_column).value)
         source_rows.append({
             "spuId": spu_id,
             "name": str(name).strip(),
@@ -106,21 +108,31 @@ def source_spu_column():
     return column_name_to_index(value)
 
 
-def column_name_to_index(value):
+def source_name_column():
+    value = os.environ.get("SOURCE_EXCEL_NAME_COLUMN", "B")
+    return column_name_to_index(value, "SOURCE_EXCEL_NAME_COLUMN")
+
+
+def source_image_column():
+    value = os.environ.get("SOURCE_EXCEL_IMAGE_COLUMN", "C")
+    return column_name_to_index(value, "SOURCE_EXCEL_IMAGE_COLUMN")
+
+
+def column_name_to_index(value, env_name="SOURCE_EXCEL_SPU_COLUMN"):
     text = str(value).strip().upper()
     if text.isdigit():
         column = int(text)
         if column < 1:
-            raise ValueError("SOURCE_EXCEL_SPU_COLUMN must be 1 or greater.")
+            raise ValueError(f"{env_name} must be 1 or greater.")
         return column
 
     column = 0
     for char in text:
         if not ("A" <= char <= "Z"):
-            raise ValueError(f"Invalid SOURCE_EXCEL_SPU_COLUMN: {value}")
+            raise ValueError(f"Invalid {env_name}: {value}")
         column = column * 26 + (ord(char) - ord("A") + 1)
     if column < 1:
-        raise ValueError("SOURCE_EXCEL_SPU_COLUMN cannot be empty.")
+        raise ValueError(f"{env_name} cannot be empty.")
     return column
 
 
@@ -191,6 +203,7 @@ def normalize_spu(value):
 
 def merge_rows_by_spu(data, source_rows=None):
     sales_by_spu = {}
+    sales_by_spu_date = {}
     traffic_by_spu = {}
     order = []
 
@@ -201,6 +214,10 @@ def merge_rows_by_spu(data, source_rows=None):
         if spu_id not in order:
             order.append(spu_id)
         sales_by_spu[spu_id] = sale.get("todaySales", "")
+        for sales_row in sale.get("salesByDate") or []:
+            sales_date = sales_row.get("date")
+            if sales_date:
+                sales_by_spu_date[(spu_id, sales_date)] = sales_row.get("sales", "")
 
     for traffic in data.get("trafficAnalysis", {}).get("records", []):
         spu_id = str(traffic.get("spuId") or "").strip()
@@ -223,7 +240,11 @@ def merge_rows_by_spu(data, source_rows=None):
             base = {"spuId": spu_id, "todaySales": sales_by_spu.get(spu_id, "")}
             traffic_rows = traffic_by_spu.get(spu_id) or [{}]
             for traffic_row in traffic_rows:
-                rows.append({**base, **traffic_row})
+                rows.append({
+                    **base,
+                    **traffic_row,
+                    "todaySales": sale_for_traffic_date(spu_id, traffic_row, sales_by_spu_date, sales_by_spu),
+                })
         return rows
 
     rows = []
@@ -234,13 +255,20 @@ def merge_rows_by_spu(data, source_rows=None):
             row = {
                 **source_row,
                 "spuId": spu_id,
-                "todaySales": sales_by_spu.get(spu_id, ""),
+                "todaySales": sale_for_traffic_date(spu_id, traffic_row, sales_by_spu_date, sales_by_spu),
                 **traffic_row,
             }
             row["name"] = source_row.get("name") or ""
             row["sourceImagePath"] = source_row.get("sourceImagePath")
             rows.append(row)
     return rows
+
+
+def sale_for_traffic_date(spu_id, traffic_row, sales_by_spu_date, sales_by_spu):
+    traffic_date = (traffic_row or {}).get("trafficDate") or (traffic_row or {}).get("date") or ""
+    if traffic_date:
+        return sales_by_spu_date.get((spu_id, traffic_date), sales_by_spu.get(spu_id, ""))
+    return sales_by_spu.get(spu_id, "")
 
 
 def setup_sheet(sheet):

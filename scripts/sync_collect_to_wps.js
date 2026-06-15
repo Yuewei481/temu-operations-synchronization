@@ -21,6 +21,7 @@ export async function syncOneAccount(options = {}) {
   };
   const sourceExcelPath = resolve(options.sourceExcelPath || env.SOURCE_EXCEL_PATH || DEFAULT_SOURCE_EXCEL_PATH);
   const pythonBin = env.PYTHON_BIN || defaultPythonBin();
+  let succeeded = false;
 
   console.log('Sync workflow started.');
   if (env.WPS_STORE_GROUP_TITLE || env.WPS_GROUP_TITLE) {
@@ -35,10 +36,13 @@ export async function syncOneAccount(options = {}) {
     await runStep('Build WPS update payload', pythonBin, ['scripts/build_wps_append_payload.py', sourceExcelPath], env);
     await runStep('Update WPS existing rows', process.execPath, ['scripts/update_wps_existing_rows_cdp.js'], env);
 
+    succeeded = true;
     console.log('Sync workflow finished.');
   } finally {
-    if (truthy(env.CLOSE_CHROME_AFTER_RUN)) {
+    if (succeeded && truthy(env.CLOSE_CHROME_AFTER_RUN)) {
       await closeChromeAfterRun(env);
+    } else if (!succeeded && truthy(env.CLOSE_CHROME_AFTER_RUN)) {
+      console.log('Chrome left open because the workflow failed before completion.');
     }
   }
 }

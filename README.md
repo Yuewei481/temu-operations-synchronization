@@ -143,6 +143,8 @@ ACCOUNT_1_CDP_PORT=9222
 ACCOUNT_1_CHROME_PROFILE=C:\seller-central-profiles\temu1
 ACCOUNT_1_SOURCE_EXCEL=C:\seller-central-data\temu-reference.xlsx
 ACCOUNT_1_SOURCE_EXCEL_SPU_COLUMN=A
+ACCOUNT_1_SOURCE_EXCEL_NAME_COLUMN=B
+ACCOUNT_1_SOURCE_EXCEL_IMAGE_COLUMN=C
 ACCOUNT_1_GROUP_TITLE=TEMU 1
 ACCOUNT_1_TRAFFIC_TARGET_DATES=
 
@@ -151,6 +153,8 @@ ACCOUNT_2_CDP_PORT=9223
 ACCOUNT_2_CHROME_PROFILE=C:\seller-central-profiles\temu2
 ACCOUNT_2_SOURCE_EXCEL=C:\seller-central-data\temu-reference.xlsx
 ACCOUNT_2_SOURCE_EXCEL_SPU_COLUMN=D
+ACCOUNT_2_SOURCE_EXCEL_NAME_COLUMN=B
+ACCOUNT_2_SOURCE_EXCEL_IMAGE_COLUMN=C
 ACCOUNT_2_GROUP_TITLE=TEMU 2
 ACCOUNT_2_TRAFFIC_TARGET_DATES=
 ```
@@ -172,6 +176,8 @@ ACCOUNT_2_TRAFFIC_TARGET_DATES=
 - `ACCOUNT_1_CHROME_PROFILE`：这个账号专用的 Chrome 登录状态目录。
 - `ACCOUNT_1_SOURCE_EXCEL`：这个账号使用的本地 Excel 对照表。
 - `ACCOUNT_1_SOURCE_EXCEL_SPU_COLUMN`：在本地 Excel 中，哪个列用来匹配 SPU。
+- `ACCOUNT_1_SOURCE_EXCEL_NAME_COLUMN`：在本地 Excel 中，哪个列是商品名称。
+- `ACCOUNT_1_SOURCE_EXCEL_IMAGE_COLUMN`：在本地 Excel 中，哪个列是商品图片。
 - `ACCOUNT_1_GROUP_TITLE`：WPS 表格第 1 行中的店铺区域标题。
 - `ACCOUNT_1_TRAFFIC_TARGET_DATES`：可选。只覆盖这个账号的目标流量日期；为空时使用全局日期或默认昨天。
 
@@ -259,11 +265,11 @@ output/wps-append-payload.json
 - 第一次写入 WPS 时，也需要人工登录 WPS 云文档。
 - `CDP_PORT` 必须每个账号不同，例如 `9222`、`9223`。
 - `ACCOUNT_*_CHROME_PROFILE` 必须每个账号不同，否则不同店铺的登录状态会混在一起。
-- `ACCOUNT_*_SOURCE_EXCEL_SPU_COLUMN` 要和本地 Excel 真实结构一致。
+- `ACCOUNT_*_SOURCE_EXCEL_SPU_COLUMN`、`ACCOUNT_*_SOURCE_EXCEL_NAME_COLUMN`、`ACCOUNT_*_SOURCE_EXCEL_IMAGE_COLUMN` 要和本地 Excel 真实结构一致。
 - `CLOSE_CHROME_AFTER_RUN=1` 只会关闭脚本通过对应 CDP 端口控制的 Chrome，不会主动关闭你的日常 Chrome。
 - 如果 TEMU 店铺商品少于分页数量，页面不会显示分页按钮，这是正常情况，脚本会读取当前页。
 - 如果流量详情里最上面的日期不是目标日期，但曝光量和点击量为 0，脚本会按目标日期处理，适配 TEMU 对连续 0 数据不更新日期的显示规则。
-- 如果配置多个流量日期，同一个商品会生成多条日期记录；销售管理页目前读取的是页面显示的“今日销量”，历史日期主要影响流量日期、曝光量和点击量。
+- 如果配置多个日期，同一个商品会生成多条日期记录；销量会优先读取销售趋势弹窗中对应日期的销量，没有销售趋势入口的商品会按 0 处理。
 - 如果 WPS 页面加载慢，可以调大 `WPS_INITIAL_WAIT_MS` 和 `WPS_OPENAPI_TIMEOUT_MS`。
 - 如果担心操作太快，可以调大 `HUMAN_DELAY_MIN_SECONDS` 和 `HUMAN_DELAY_MAX_SECONDS`。
 

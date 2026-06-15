@@ -11,6 +11,7 @@
     "check-seller-home:playwright": "node scripts/check_seller_home_playwright.js",
     "collect-sales": "node scripts/collect_sales_data_in_chrome.js",
     "collect-sales:cdp": "node scripts/collect_sales_data_cdp.js",
+    "collect-traffic:cdp": "node scripts/collect_traffic_data_cdp.js",
     "collect-sales:playwright": "node scripts/collect_sales_data_playwright.js",
     "export-excel": "python3 scripts/export_sales_excel.py",
     "build-wps-payload": "python3 scripts/build_wps_append_payload.py",
