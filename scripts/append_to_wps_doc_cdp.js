@@ -3,7 +3,7 @@ import { resolve } from 'node:path';
 import { spawn } from 'node:child_process';
 import { CdpPage, activateCdpPage, getCdpOrigin, listCdpPages } from './cdp_client.js';
 
-const DEFAULT_DOC_URL = 'https://www.kdocs.cn/l/chi6auhHtScx';
+const DEFAULT_DOC_URL = '';
 const DEFAULT_SHEET_NAME = 'temu1店运营数据记录表';
 const DEFAULT_PAYLOAD_PATH = 'output/wps-append-payload.json';
 const DEFAULT_INITIAL_WAIT_MS = 30 * 1000;
@@ -21,6 +21,9 @@ const POLL_INTERVAL_MS = 1000;
 async function main() {
   const cdpOrigin = getCdpOrigin();
   const docUrl = process.env.WPS_DOC_URL || DEFAULT_DOC_URL;
+  if (!docUrl) {
+    throw new Error('请在 .env 中配置 WPS_DOC_URL。');
+  }
   const sheetName = process.env.WPS_SHEET_NAME || DEFAULT_SHEET_NAME;
   const payloadPath = resolve(process.env.WPS_APPEND_PAYLOAD || DEFAULT_PAYLOAD_PATH);
   const payload = JSON.parse(await readFile(payloadPath, 'utf8'));
@@ -96,8 +99,7 @@ async function findOrOpenWpsPage(cdpOrigin, docUrl) {
   const existing = pages.find(
     (page) =>
       page.type === 'page' &&
-      (page.url.includes('kdocs.cn') || page.url.includes('wps.cn')) &&
-      (page.title.includes('TEMU1店运营数据记录表') || page.url.includes('chi6auhHtScx')),
+      (page.url.includes('kdocs.cn') || page.url.includes('wps.cn')),
   );
   if (existing) {
     return existing;

@@ -2,7 +2,7 @@ import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { CdpPage, activateCdpPage, getCdpOrigin, listCdpPages } from './cdp_client.js';
 
-const DEFAULT_DOC_URL = 'https://www.kdocs.cn/l/REMOVED_PRIVATE_DOCUMENT';
+const DEFAULT_DOC_URL = '';
 const DEFAULT_SHEET_NAME = '运营数据记录表';
 const DEFAULT_STORE_GROUP_TITLE = 'TEMU 1';
 const DEFAULT_HEADER_ALIASES = {
@@ -21,6 +21,9 @@ const POLL_INTERVAL_MS = 1000;
 async function main() {
   const cdpOrigin = getCdpOrigin();
   const docUrl = process.env.WPS_DOC_URL || DEFAULT_DOC_URL;
+  if (!docUrl) {
+    throw new Error('请在 .env 中配置 WPS_DOC_URL。');
+  }
   const sheetName = process.env.WPS_SHEET_NAME || DEFAULT_SHEET_NAME;
   const storeGroupTitle = process.env.WPS_STORE_GROUP_TITLE || process.env.WPS_GROUP_TITLE || DEFAULT_STORE_GROUP_TITLE;
   const headerAliases = buildHeaderAliases();
