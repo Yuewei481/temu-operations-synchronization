@@ -14,6 +14,7 @@ const POLL_INTERVAL_MS = 3000;
 const DEFAULT_SALES_TABLE_TIMEOUT_MS = 3 * 60 * 1000;
 const DEFAULT_TRAFFIC_TABLE_TIMEOUT_MS = 3 * 60 * 1000;
 const OUTPUT_PATH = 'output/sales-data.json';
+const TRAFFIC_QUERY_BUTTON_XPATH = '//*[@id="page_container_id"]/div[2]/div/div[1]/div[2]/form/div/div/div[5]/div/button[1]/span';
 
 async function main() {
   const cdpOrigin = getCdpOrigin();
@@ -546,7 +547,7 @@ async function collectEuTrafficAnalysis(page, humanDelayConfig, targetDates = re
     seenPages.add(activePage);
 
     await humanPause(`reading traffic list page ${activePage}`, humanDelayConfig);
-    const pageRecords = await collectTrafficDetailsOnCurrentPage(page, activePage, humanDelayConfig, targetDates);
+    const pageRecords = await collectTrafficDetailsOnCurrentPageWithQueryRetry(page, activePage, humanDelayConfig, targetDates);
     pages.push({
       pageNumber: activePage,
       totalText: state.totalText,
@@ -828,6 +829,33 @@ async function waitForTrafficPageChange(page, previousPageNumber, timeoutMs) {
   }
 
   throw new Error(`没有在限定时间内切换到流量分析下一页`);
+}
+
+async function collectTrafficDetailsOnCurrentPageWithQueryRetry(page, pageNumber, humanDelayConfig, targetDates) {
+  const maxQueryRetries = Number.parseInt(process.env.TRAFFIC_EMPTY_QUERY_RETRIES || '2', 10);
+  for (let attempt = 0; attempt <= maxQueryRetries; attempt += 1) {
+    const pageRecords = await collectTrafficDetailsOnCurrentPage(page, pageNumber, humanDelayConfig, targetDates);
+    if (pageRecords.length > 0 || attempt >= maxQueryRetries) {
+      return pageRecords;
+    }
+
+    console.log(`Traffic page ${pageNumber} has no product rows; clicking 查询 and retrying (${attempt + 1}/${maxQueryRetries})...`);
+    await humanPause('clicking traffic query button for empty list', humanDelayConfig);
+    const clicked = await clickTrafficQueryButton(page);
+    if (!clicked) {
+      console.log('Traffic query button was not found; keeping empty traffic result for this page.');
+      return pageRecords;
+    }
+
+    await waitForTrafficDateRows(page, 60000, '查询');
+    await sleep(POLL_INTERVAL_MS);
+  }
+
+  return [];
+}
+
+async function clickTrafficQueryButton(page) {
+  return evaluate(page, buildClickTrafficQueryButtonScript());
 }
 
 async function collectTrafficDetailsOnCurrentPage(page, pageNumber, humanDelayConfig, targetDates) {
@@ -1612,6 +1640,33 @@ function buildHasTrafficDateControlsScript() {
         .find((item) => dateTexts.has(item.text) && item.rect.width > 0 && item.rect.height > 0 && item.rect.top > 80),
     );
   });
+}
+
+function buildClickTrafficQueryButtonScript() {
+  return browserFunction((xpath) => {
+    const xpathNode = document.evaluate(xpath, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;
+    const xpathButton = xpathNode?.closest?.('button') || xpathNode;
+    if (xpathButton) {
+      xpathButton.scrollIntoView({ block: 'center', inline: 'center' });
+      xpathButton.click();
+      return true;
+    }
+
+    const candidates = Array.from(document.querySelectorAll('button, span, a'))
+      .filter((element) => {
+        const text = (element.textContent || '').trim();
+        const rect = element.getBoundingClientRect();
+        return text === '查询' && rect.width > 0 && rect.height > 0;
+      });
+    const fallback = candidates[0]?.closest?.('button') || candidates[0];
+    if (!fallback) {
+      return false;
+    }
+
+    fallback.scrollIntoView({ block: 'center', inline: 'center' });
+    fallback.click();
+    return true;
+  }, TRAFFIC_QUERY_BUTTON_XPATH);
 }
 
 function buildCollectTrafficListRowsScript() {
