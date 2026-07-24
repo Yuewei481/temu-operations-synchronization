@@ -1,7 +1,3 @@
-# TEMU Operations Synchronization
-
-Automates TEMU seller operations data collection, including daily sales, exposure, and click metrics. The script matches products against local Excel reference files, then writes the results into the correct store section of a WPS cloud spreadsheet.
-
 ## 本脚本功能
 
 这个项目用于半自动采集 TEMU Seller Central 店铺运营数据，并同步到 WPS 云表格。
