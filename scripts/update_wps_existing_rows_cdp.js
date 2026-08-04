@@ -4,14 +4,6 @@ import { CdpPage, activateCdpPage, getCdpOrigin, listCdpPages } from './cdp_clie
 
 const DEFAULT_DOC_URL = '';
 const DEFAULT_SHEET_NAME = '运营数据记录表';
-const DEFAULT_STORE_GROUP_TITLE = 'TEMU 1';
-const DEFAULT_HEADER_ALIASES = {
-  dateColumn: ['日期'],
-  nameColumn: ['SKU', '商品名称', '商品名', '名称'],
-  salesColumn: ['销量（件）', '销量', '销售量', '销售量（件）'],
-  exposureColumn: ['曝光量（次）', '曝光量', '曝光'],
-  clicksColumn: ['点击量（次）', '点击量', '点击'],
-};
 const DEFAULT_PAYLOAD_PATH = 'output/wps-append-payload.json';
 const DEFAULT_INITIAL_WAIT_MS = 30 * 1000;
 const DEFAULT_OPENAPI_TIMEOUT_MS = 180 * 1000;
@@ -25,8 +17,7 @@ async function main() {
     throw new Error('请在 .env 中配置 WPS_DOC_URL。');
   }
   const sheetName = process.env.WPS_SHEET_NAME || DEFAULT_SHEET_NAME;
-  const storeGroupTitle = process.env.WPS_STORE_GROUP_TITLE || process.env.WPS_GROUP_TITLE || DEFAULT_STORE_GROUP_TITLE;
-  const headerAliases = buildHeaderAliases();
+  const configuredLayout = buildConfiguredLayout();
   const payloadPath = resolve(process.env.WPS_UPDATE_PAYLOAD || process.env.WPS_APPEND_PAYLOAD || DEFAULT_PAYLOAD_PATH);
   const payload = JSON.parse(await readFile(payloadPath, 'utf8'));
   const rows = payload.rows || [];
@@ -55,7 +46,7 @@ async function main() {
 
     console.log(`Activating sheet: ${sheetName}`);
     await activateWpsWorksheet(page, sheetName);
-    const layout = await verifyTargetSheet(page, sheetName, storeGroupTitle, headerAliases);
+    const layout = await verifyTargetSheet(page, sheetName, configuredLayout);
 
     if (process.env.WPS_UPDATE_DRY_RUN === '1') {
       const preview = await updateExistingRows(page, rows, { dryRun: true, layout });
@@ -65,7 +56,7 @@ async function main() {
 
     const result = await updateExistingRows(page, rows, { dryRun: false, layout });
     printUpdateResult(result);
-    console.log('Done. Existing rows were updated without changing the image column.');
+    console.log('Done. Rows were matched or appended using the configured date, name, and sales columns.');
   } finally {
     await page.close();
   }
@@ -75,25 +66,44 @@ function wpsOpenApiTimeoutMs() {
   return Number.parseInt(process.env.WPS_OPENAPI_TIMEOUT_MS || `${DEFAULT_OPENAPI_TIMEOUT_MS}`, 10);
 }
 
-function buildHeaderAliases() {
-  return {
-    dateColumn: splitHeaderAliases(process.env.WPS_DATE_HEADER, DEFAULT_HEADER_ALIASES.dateColumn),
-    nameColumn: splitHeaderAliases(process.env.WPS_NAME_HEADER, DEFAULT_HEADER_ALIASES.nameColumn),
-    salesColumn: splitHeaderAliases(process.env.WPS_SALES_HEADER, DEFAULT_HEADER_ALIASES.salesColumn),
-    exposureColumn: splitHeaderAliases(process.env.WPS_EXPOSURE_HEADER, DEFAULT_HEADER_ALIASES.exposureColumn),
-    clicksColumn: splitHeaderAliases(process.env.WPS_CLICKS_HEADER, DEFAULT_HEADER_ALIASES.clicksColumn),
+function buildConfiguredLayout() {
+  const raw = {
+    dateColumn: process.env.WPS_DATE_COLUMN,
+    nameColumn: process.env.WPS_NAME_COLUMN,
+    salesColumn: process.env.WPS_SALES_COLUMN,
   };
+  const missing = Object.entries(raw)
+    .filter(([, value]) => !String(value || '').trim())
+    .map(([key]) => key);
+  if (missing.length) {
+    throw new Error(`Missing required WPS column configuration: ${missing.join(', ')}`);
+  }
+  const columns = Object.fromEntries(
+    Object.entries(raw).map(([key, value]) => [key, excelColumnToIndex(value, key)]),
+  );
+  if (new Set(Object.values(columns)).size !== Object.values(columns).length) {
+    throw new Error('WPS date, name, and sales columns must be different.');
+  }
+  const startRow = Number.parseInt(String(process.env.WPS_START_ROW || '').trim(), 10);
+  if (!Number.isFinite(startRow) || startRow < 1) {
+    throw new Error('WPS_START_ROW must be a positive integer.');
+  }
+  return { ...columns, startRow };
 }
 
-function splitHeaderAliases(value, fallback) {
-  if (!value) {
-    return fallback;
+function excelColumnToIndex(value, label) {
+  const text = String(value || '').trim().toUpperCase();
+  if (/^\d+$/.test(text) && Number(text) > 0) {
+    return Number(text);
   }
-  const aliases = value
-    .split(',')
-    .map((item) => item.trim())
-    .filter(Boolean);
-  return aliases.length ? aliases : fallback;
+  if (!/^[A-Z]+$/.test(text)) {
+    throw new Error(`Invalid ${label}: ${value}`);
+  }
+  let result = 0;
+  for (const character of text) {
+    result = result * 26 + character.charCodeAt(0) - 64;
+  }
+  return result;
 }
 
 async function findOrOpenWpsPage(cdpOrigin, docUrl) {
@@ -176,125 +186,22 @@ async function activateWpsWorksheet(page, sheetName) {
   console.log(`Active sheet: ${result.after} (was ${result.before || 'unknown'})`);
 }
 
-async function verifyTargetSheet(page, sheetName, storeGroupTitle, headerAliases) {
-  const layout = await page.evaluate(browserFunction(async (targetSheetName, targetGroupTitle, expectedHeaders) => {
+async function verifyTargetSheet(page, sheetName, configuredLayout) {
+  const result = await page.evaluate(browserFunction(async (targetSheetName, layout) => {
     const app = window.WPSOpenApi.Application;
-    const group = await findGroupLayout(app, targetGroupTitle, expectedHeaders);
     return {
       activeSheetName: String(await Promise.resolve(app.ActiveSheet?.Name).catch(() => '') || ''),
-      group,
+      layout,
     };
+  }, sheetName, configuredLayout));
 
-    async function findGroupLayout(wpsApp, groupTitle, headerAliasesByRole) {
-      const maxColumn = 120;
-      const rowOne = [];
-      for (let column = 1; column <= maxColumn; column += 1) {
-        const text = normalizeText(await cellTextByIndex(wpsApp, 1, column, true));
-        if (text) {
-          rowOne.push({ column, text });
-        }
-      }
-
-      const targetGroupKey = normalizeGroupTitle(groupTitle);
-      const groupStart = rowOne.find((cell) => normalizeGroupTitle(cell.text) === targetGroupKey);
-      if (!groupStart) {
-        throw new Error(`Unable to find store group title in row 1: ${groupTitle}`);
-      }
-
-      const nextGroup = rowOne.find((cell) => cell.column > groupStart.column && normalizeGroupTitle(cell.text) !== targetGroupKey);
-      const groupEndColumn = nextGroup ? nextGroup.column - 1 : Math.min(maxColumn, groupStart.column + 24);
-      const headers = {};
-      for (let column = groupStart.column; column <= groupEndColumn; column += 1) {
-        const text = normalizeHeader(await cellTextByIndex(wpsApp, 2, column, true));
-        if (!text) {
-          continue;
-        }
-        for (const [role, aliases] of Object.entries(headerAliasesByRole)) {
-          if (!headers[role] && aliases.some((alias) => text === normalizeHeader(alias))) {
-            headers[role] = column;
-          }
-        }
-      }
-
-      applyRelativeHeaderFallback(headers, groupStart.column);
-
-      const required = ['dateColumn', 'nameColumn', 'salesColumn', 'exposureColumn', 'clicksColumn'];
-      for (const key of required) {
-        if (!headers[key]) {
-          const expected = headerAliasesByRole[key].join(' / ');
-          throw new Error(`Missing required header under ${groupTitle}: ${key}. Expected one of: ${expected}`);
-        }
-      }
-
-      return {
-        groupTitle: groupStart.text,
-        groupStartColumn: groupStart.column,
-        groupEndColumn,
-        ...headers,
-      };
-    }
-
-    function applyRelativeHeaderFallback(headers, groupStartColumn) {
-      const dateColumn = headers.dateColumn || groupStartColumn;
-      headers.dateColumn ||= dateColumn;
-      headers.nameColumn ||= dateColumn + 1;
-      headers.salesColumn ||= dateColumn + 3;
-      headers.exposureColumn ||= dateColumn + 4;
-      headers.clicksColumn ||= dateColumn + 5;
-    }
-
-    async function cellTextByIndex(wpsApp, row, column, useMergeTopLeft = false) {
-      const address = `${columnName(column)}${row}`;
-      return cellText(wpsApp, address, useMergeTopLeft);
-    }
-
-    async function cellText(wpsApp, address, useMergeTopLeft = false) {
-      const range = wpsApp.Range(address);
-      const directText = String(await Promise.resolve(range.Text).catch(() => '') || '').trim();
-      if (directText || !useMergeTopLeft) {
-        return directText;
-      }
-
-      const mergeArea = await Promise.resolve(range.MergeArea).catch(() => null);
-      if (!mergeArea) {
-        return directText;
-      }
-
-      const mergedText = String(await Promise.resolve(mergeArea.Cells(1, 1).Text).catch(() => '') || '').trim();
-      return mergedText || directText;
-    }
-
-    function columnName(column) {
-      let name = '';
-      let value = column;
-      while (value > 0) {
-        const remainder = (value - 1) % 26;
-        name = String.fromCharCode(65 + remainder) + name;
-        value = Math.floor((value - 1) / 26);
-      }
-      return name;
-    }
-
-    function normalizeText(value) {
-      return String(value ?? '').replace(/\s+/g, ' ').trim();
-    }
-
-    function normalizeGroupTitle(value) {
-      return normalizeText(value).replace(/\s+/g, '').toUpperCase();
-    }
-
-    function normalizeHeader(value) {
-      return normalizeText(value).replace(/[（）()\s]/g, '');
-    }
-  }, sheetName, storeGroupTitle, headerAliases));
-
-  if (layout.activeSheetName !== sheetName) {
-    throw new Error(`Target sheet verification failed. Expected ${sheetName}, got ${layout.activeSheetName || '(empty)'}.`);
+  if (result.activeSheetName !== sheetName) {
+    throw new Error(`Target sheet verification failed. Expected ${sheetName}, got ${result.activeSheetName || '(empty)'}.`);
   }
   console.log(
-    `Verified target group: ${layout.group.groupTitle} columns ${layout.group.groupStartColumn}-${layout.group.groupEndColumn}; date=${layout.group.dateColumn}, SKU=${layout.group.nameColumn}, sales=${layout.group.salesColumn}, exposure=${layout.group.exposureColumn}, clicks=${layout.group.clicksColumn}`,
+    `Verified target layout: date=${configuredLayout.dateColumn}, name=${configuredLayout.nameColumn}, sales=${configuredLayout.salesColumn}, start row=${configuredLayout.startRow}`,
   );
-  return layout.group;
+  return configuredLayout;
 }
 
 function buildSheetTabPointScript(sheetName) {
@@ -328,12 +235,15 @@ async function updateExistingRows(page, rows, { dryRun, layout }) {
     const dateColumn = columnName(sheetLayout.dateColumn);
     const nameColumn = columnName(sheetLayout.nameColumn);
     const salesColumn = columnName(sheetLayout.salesColumn);
-    const exposureColumn = columnName(sheetLayout.exposureColumn);
-    const clicksColumn = columnName(sheetLayout.clicksColumn);
+    let lastUsedRow = sheetLayout.startRow - 1;
 
-    for (let rowIndex = 3; rowIndex <= maxRow; rowIndex += 1) {
+    for (let rowIndex = sheetLayout.startRow; rowIndex <= maxRow; rowIndex += 1) {
       const dateText = normalizeDate(await cellText(app, `${dateColumn}${rowIndex}`, true));
       const nameText = normalizeName(await cellText(app, `${nameColumn}${rowIndex}`, true));
+      const salesText = String(await cellText(app, `${salesColumn}${rowIndex}`) || '').trim();
+      if (dateText || nameText || salesText) {
+        lastUsedRow = rowIndex;
+      }
       if (!dateText && !nameText) {
         continue;
       }
@@ -350,24 +260,27 @@ async function updateExistingRows(page, rows, { dryRun, layout }) {
     }
 
     const updated = [];
-    const missing = [];
+    const appended = [];
     const failedWrites = [];
+    let nextRow = Math.max(sheetLayout.startRow, lastUsedRow + 1);
     for (const payloadRow of payloadRows) {
       const dateText = normalizeDate(payloadRow.date);
       const nameText = normalizeName(payloadRow.name);
       const key = `${dateText}\u0000${nameText}`;
-      const targetRow = index.get(key);
-      if (!targetRow) {
-        missing.push({ date: payloadRow.date || '', name: payloadRow.name || '' });
-        continue;
-      }
+      const existingRow = index.get(key);
+      const targetRow = existingRow || nextRow++;
+      const rowWasAppended = !existingRow;
 
       if (!shouldDryRun) {
-        const writes = [
-          { address: `${salesColumn}${targetRow}`, value: toCellNumberOrText(payloadRow.sales), field: 'sales' },
-          { address: `${exposureColumn}${targetRow}`, value: toCellNumberOrText(payloadRow.exposure), field: 'exposure' },
-          { address: `${clicksColumn}${targetRow}`, value: toCellNumberOrText(payloadRow.clicks), field: 'clicks' },
-        ];
+        const writes = rowWasAppended
+          ? [
+            { address: `${dateColumn}${targetRow}`, value: payloadRow.date || '', field: 'date' },
+            { address: `${nameColumn}${targetRow}`, value: payloadRow.name || '', field: 'name' },
+            { address: `${salesColumn}${targetRow}`, value: toCellNumberOrText(payloadRow.sales), field: 'sales' },
+          ]
+          : [
+            { address: `${salesColumn}${targetRow}`, value: toCellNumberOrText(payloadRow.sales), field: 'sales' },
+          ];
         for (const write of writes) {
           await writeCellValue(app, write.address, write.value);
         }
@@ -389,18 +302,22 @@ async function updateExistingRows(page, rows, { dryRun, layout }) {
         }
       }
 
-      updated.push({
+      const resultRow = {
         row: targetRow,
         date: payloadRow.date || '',
         name: payloadRow.name || '',
         sales: String(payloadRow.sales ?? ''),
-        exposure: String(payloadRow.exposure ?? ''),
-        clicks: String(payloadRow.clicks ?? ''),
-      });
+      };
+      if (rowWasAppended) {
+        appended.push(resultRow);
+        index.set(key, targetRow);
+      } else {
+        updated.push(resultRow);
+      }
     }
 
     await new Promise((resolve) => setTimeout(resolve, 1500));
-    return { updated, missing, duplicateKeys, failedWrites };
+    return { updated, appended, duplicateKeys, failedWrites };
 
     async function writeCellValue(wpsApp, address, value) {
       const range = wpsApp.Range(address);
@@ -471,24 +388,24 @@ async function updateExistingRows(page, rows, { dryRun, layout }) {
 }
 
 function printUpdateResult(result) {
-  console.log(`Matched rows: ${result.updated.length}`);
+  console.log(`Matched rows updated: ${result.updated.length}`);
   if (result.updated.length) {
     console.log('Updated/matched preview:');
     for (const row of result.updated.slice(0, 20)) {
-      console.log(`  row ${row.row}: ${row.date} / ${row.name} -> sales=${row.sales}, exposure=${row.exposure}, clicks=${row.clicks}`);
+      console.log(`  row ${row.row}: ${row.date} / ${row.name} -> sales=${row.sales}`);
     }
     if (result.updated.length > 20) {
       console.log(`  ... ${result.updated.length - 20} more`);
     }
   }
 
-  if (result.missing.length) {
-    console.log(`Missing rows: ${result.missing.length}`);
-    for (const row of result.missing.slice(0, 20)) {
-      console.log(`  missing: ${row.date} / ${row.name}`);
+  if (result.appended.length) {
+    console.log(`New rows appended: ${result.appended.length}`);
+    for (const row of result.appended.slice(0, 20)) {
+      console.log(`  row ${row.row}: ${row.date} / ${row.name} -> sales=${row.sales}`);
     }
-    if (result.missing.length > 20) {
-      console.log(`  ... ${result.missing.length - 20} more missing`);
+    if (result.appended.length > 20) {
+      console.log(`  ... ${result.appended.length - 20} more appended`);
     }
   }
 

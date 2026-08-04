@@ -1,6 +1,6 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
-import { CdpPage, activateCdpPage, findCdpPage, getCdpOrigin } from './cdp_client.js';
+import { CdpPage, activateCdpPage, getCdpOrigin, listCdpPages } from './cdp_client.js';
 import { parseHumanDelayConfig, randomHumanDelayMs } from './human_timing.js';
 
 const SELLER_HOME_ORIGIN = 'https://agentseller.temu.com';
@@ -13,6 +13,8 @@ const DEFAULT_MANUAL_LOGIN_TIMEOUT_MS = 10 * 60 * 1000;
 const POLL_INTERVAL_MS = 3000;
 const DEFAULT_SALES_TABLE_TIMEOUT_MS = 3 * 60 * 1000;
 const DEFAULT_TRAFFIC_TABLE_TIMEOUT_MS = 3 * 60 * 1000;
+const DEFAULT_SALES_TREND_RENDER_DELAY_MIN_SECONDS = 5;
+const DEFAULT_SALES_TREND_RENDER_DELAY_MAX_SECONDS = 7;
 const OUTPUT_PATH = 'output/sales-data.json';
 const TRAFFIC_QUERY_BUTTON_XPATH = '//*[@id="page_container_id"]/div[2]/div/div[1]/div[2]/form/div/div/div[5]/div/button[1]/span';
 
@@ -30,7 +32,7 @@ async function main() {
     console.log('Step 2 reached: fulfillment center entry page detected. Waiting for you to click 进入 manually...');
   }
 
-  let sellerPageInfo = await waitForSellerHomePage(cdpOrigin);
+  let sellerPageInfo = await waitForSellerHomePage(cdpOrigin, entryPage.id);
   if (!sellerPageInfo) {
     throw new Error('Seller Central home tab not found. Please click 进入 manually and keep Chrome open.');
   }
@@ -115,7 +117,7 @@ async function main() {
     const guideResult = await evaluate(page, buildDismissGuideScript());
     console.log(`Guide dialog result: ${guideResult}`);
 
-    console.log('Step 4: reading visible SPU IDs and date-specific sales');
+    console.log('Step 4: reading visible SKU货号 and date-specific sales');
     const result = await collectAllSalesPages(page, humanDelayConfig, targetDates);
 
     if (process.env.COLLECT_SALES_ONLY === '1') {
@@ -127,7 +129,7 @@ async function main() {
         const salesSummary = (record.salesByDate || [])
           .map((item) => `${item.date}:${item.sales}`)
           .join(', ');
-        console.log(`SPU ${record.spuId || 'unknown'}: sales ${salesSummary || record.todaySales || ''}`);
+        console.log(`SKU货号 ${record.skuCargoNo || 'unknown'}: sales ${salesSummary || record.todaySales || ''}`);
       }
       return;
     }
@@ -138,14 +140,14 @@ async function main() {
     await mkdir(dirname(OUTPUT_PATH), { recursive: true });
     await writeFile(OUTPUT_PATH, `${JSON.stringify(result, null, 2)}\n`);
 
-    console.log(`Collected ${result.records.length} SPU rows from ${result.pages.length} page(s).`);
+    console.log(`Collected ${result.records.length} SKU货号 rows from ${result.pages.length} page(s).`);
     console.log(`Collected ${result.trafficAnalysis.records.length} traffic detail row(s).`);
     console.log(`Saved: ${OUTPUT_PATH}`);
     for (const record of result.records) {
       const salesSummary = (record.salesByDate || [])
         .map((item) => `${item.date}:${item.sales}`)
         .join(', ');
-      console.log(`SPU ${record.spuId || 'unknown'}: sales ${salesSummary || record.todaySales || ''}`);
+      console.log(`SKU货号 ${record.skuCargoNo || 'unknown'}: sales ${salesSummary || record.todaySales || ''}`);
     }
     for (const record of result.trafficAnalysis.records) {
       console.log(
@@ -166,15 +168,15 @@ async function waitForEntryPage(cdpOrigin) {
   console.log(`Waiting up to ${Math.round(timeoutMs / 1000)} seconds for Chrome CDP to reach Seller Central entry...`);
 
   while (Date.now() < deadline) {
-    const page = await findCdpPage(
+    const pages = (await listCdpPages(cdpOrigin)).filter(
       (candidate) =>
-        candidate.url.startsWith(SELLER_HOME_ORIGIN) ||
-        candidate.url.startsWith(SELLER_EU_ORIGIN) ||
-        candidate.url.startsWith(SELLER_SETTLE_ORIGIN),
-      cdpOrigin,
+        candidate.type === 'page' &&
+        (candidate.url.startsWith(SELLER_HOME_ORIGIN) ||
+          candidate.url.startsWith(SELLER_EU_ORIGIN) ||
+          candidate.url.startsWith(SELLER_SETTLE_ORIGIN)),
     );
-    if (page) {
-      return page;
+    if (pages.length > 0) {
+      return (await findVisiblePage(pages)) || pages[0];
     }
 
     console.log('Seller Central entry not detected yet. Please complete manual login in Chrome...');
@@ -184,7 +186,7 @@ async function waitForEntryPage(cdpOrigin) {
   return null;
 }
 
-async function waitForSellerHomePage(cdpOrigin) {
+async function waitForSellerHomePage(cdpOrigin, entryTargetId) {
   const minWaitMs = Number.parseInt(process.env.SELLER_HOME_AFTER_ENTRY_MIN_WAIT_MS || '120000', 10);
   const timeoutMs = Number.parseInt(process.env.SELLER_HOME_AFTER_ENTRY_TIMEOUT_MS || '600000', 10);
   const startTime = Date.now();
@@ -196,16 +198,20 @@ async function waitForSellerHomePage(cdpOrigin) {
   );
 
   while (Date.now() < deadline) {
-    const pages = (await findAllSellerHomePages(cdpOrigin));
-    for (const page of pages) {
-      if (await cdpPageHasLoadedShell(page)) {
-        loadedPage = page;
-        if (Date.now() >= minWaitDeadline) {
-          return loadedPage;
-        }
-        console.log('Seller Central menu is loaded; waiting for the minimum post-entry delay to finish...');
-        break;
+    const pages = await findAllSellerHomePages(cdpOrigin);
+    const inspectedPages = await inspectSellerHomePages(pages);
+    const loadedPages = inspectedPages.filter((candidate) => candidate.loaded);
+    const preferredPage =
+      loadedPages.find((candidate) => candidate.visible) ||
+      loadedPages.find((candidate) => candidate.page.id !== entryTargetId) ||
+      loadedPages[0];
+
+    if (preferredPage) {
+      loadedPage = preferredPage.page;
+      if (Date.now() >= minWaitDeadline) {
+        return loadedPage;
       }
+      console.log('Seller Central menu is loaded; waiting for the minimum post-entry delay to finish...');
     }
 
     if (loadedPage) {
@@ -220,7 +226,6 @@ async function waitForSellerHomePage(cdpOrigin) {
 }
 
 async function findAllSellerHomePages(cdpOrigin) {
-  const { listCdpPages } = await import('./cdp_client.js');
   const pages = await listCdpPages(cdpOrigin);
   return pages.filter(
     (candidate) =>
@@ -229,17 +234,47 @@ async function findAllSellerHomePages(cdpOrigin) {
   );
 }
 
-async function cdpPageHasLoadedShell(pageInfo) {
+async function inspectSellerHomePages(pages) {
+  const results = [];
+  for (const page of pages) {
+    results.push(await inspectSellerHomePage(page));
+  }
+  return results;
+}
+
+async function inspectSellerHomePage(pageInfo) {
   const page = new CdpPage(pageInfo);
   try {
     await page.send('Runtime.enable');
     const text = await page.evaluate('(document.body && document.body.innerText) || ""');
-    return text.includes('销售管理') || text.includes('备货管理') || text.includes('商品管理');
+    const visibilityState = await page.evaluate('document.visibilityState || "hidden"');
+    return {
+      page: pageInfo,
+      loaded: text.includes('销售管理') || text.includes('备货管理') || text.includes('商品管理'),
+      visible: visibilityState === 'visible',
+    };
   } catch {
-    return false;
+    return { page: pageInfo, loaded: false, visible: false };
   } finally {
     await page.close();
   }
+}
+
+async function findVisiblePage(pages) {
+  for (const pageInfo of pages) {
+    const page = new CdpPage(pageInfo);
+    try {
+      await page.send('Runtime.enable');
+      if ((await page.evaluate('document.visibilityState || "hidden"')) === 'visible') {
+        return pageInfo;
+      }
+    } catch {
+      // Ignore pages that are still navigating and inspect the next candidate.
+    } finally {
+      await page.close();
+    }
+  }
+  return null;
 }
 
 async function attachToPage(pageInfo, cdpOrigin) {
@@ -344,20 +379,30 @@ async function collectSalesRecordsOnCurrentPage(page, pageNumber, humanDelayConf
   const initialRecords = JSON.parse(await evaluate(page, buildCollectSalesRecordsScript()));
   const count = initialRecords.length;
   const records = [];
+  const seenSkuCargoNumbers = new Set();
   console.log(`Sales page ${pageNumber}: found ${count} product sales row(s).`);
 
   for (let index = 0; index < initialRecords.length; index += 1) {
     await humanPause(`reading sales product ${index + 1}/${count} on page ${pageNumber}`, humanDelayConfig);
     const record = initialRecords[index];
-    if (!record?.spuId) {
+    if (!record?.skuCargoNo || !record?.locatorSkuId) {
       console.log(`Sales product ${index + 1}/${count} on page ${pageNumber}: skipped because row snapshot is incomplete.`);
       continue;
     }
 
+    if (seenSkuCargoNumbers.has(record.skuCargoNo)) {
+      console.log(
+        `Sales product ${index + 1}/${count} on page ${pageNumber}: SKU货号 ${record.skuCargoNo} ` +
+          'was already collected on this page; treating it as the same product and skipping the duplicate.',
+      );
+      continue;
+    }
+    seenSkuCargoNumbers.add(record.skuCargoNo);
+
     record.salesByDate = await collectSalesByDateForRecord(page, index, record, targetDates, humanDelayConfig);
     records.push(record);
     console.log(
-      `Read sales product ${index + 1}/${count} on page ${pageNumber}: SPU ${record.spuId || 'unknown'}, ` +
+      `Read sales product ${index + 1}/${count} on page ${pageNumber}: SKU货号 ${record.skuCargoNo || 'unknown'}, ` +
         `sales ${record.salesByDate.map((item) => `${item.date}:${item.sales}`).join(', ')}`,
     );
     await humanPause(`finished sales product ${index + 1}/${count} on page ${pageNumber}`, humanDelayConfig);
@@ -378,33 +423,35 @@ async function collectSalesByDateForRecord(page, index, record, targetDates, hum
     return targetDates.map((date) => ({ date, sales: '0', source: 'no-sales-trend' }));
   }
 
-  let trendReady = false;
-  for (let attempt = 1; attempt <= 3; attempt += 1) {
-    await ensureSalesTrendDialogClosed(page);
-    await humanPause(`opening sales trend for product ${index + 1} (attempt ${attempt})`, humanDelayConfig);
-    const opened = await openSalesTrendDialog(page, record);
-    if (!opened) {
-      console.log(`Sales product ${index + 1}: 销售趋势 button was expected but could not be clicked (attempt ${attempt}).`);
-      continue;
-    }
-
-    trendReady = await waitForSalesTrendDialog(page, 60000);
-    if (trendReady) {
-      break;
-    }
-
-    console.log(`Sales product ${index + 1}: 销售趋势弹窗没有在限定时间内出现 (attempt ${attempt}).`);
-    await forceCloseSalesTrendDialog(page);
-  }
+  let trendReady = await openSalesTrendForRecord(page, index, record, humanDelayConfig);
 
   if (!trendReady) {
-    throw new Error(`SPU ${record.spuId} 有销售趋势按钮，但连续 3 次无法打开或识别销售趋势弹窗；已停止以避免写入错误销量。`);
+    throw new Error(`SKU货号 ${record.skuCargoNo} 有销售趋势按钮，但连续 3 次无法打开或识别销售趋势弹窗；已停止以避免写入错误销量。`);
   }
   const salesByDate = [];
   for (const targetDate of targetDates) {
-    await humanPause(`hovering sales trend ${targetDate}`, humanDelayConfig);
-    const recordForDate = await readSalesTrendPoint(page, targetDate);
-    salesByDate.push(recordForDate || { date: targetDate, sales: '0', source: 'sales-trend-missing' });
+    let recordForDate = null;
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      if (attempt > 1) {
+        console.log(`Sales trend ${targetDate}: reopening dialog after unreadable tooltip (attempt ${attempt}).`);
+        await ensureSalesTrendDialogClosed(page);
+        trendReady = await openSalesTrendForRecord(page, index, record, humanDelayConfig);
+        if (!trendReady) {
+          continue;
+        }
+      }
+
+      await humanPause(`reading sales trend ${targetDate} (attempt ${attempt})`, humanDelayConfig);
+      recordForDate = await readSalesTrendPoint(page, targetDate);
+      if (recordForDate) {
+        break;
+      }
+    }
+
+    if (!recordForDate) {
+      console.log(`SKU货号 ${record.skuCargoNo}: failed to read sales trend for ${targetDate}; preserving the value as null.`);
+    }
+    salesByDate.push(recordForDate || { date: targetDate, sales: null, source: 'sales-trend-read-failed' });
   }
 
   await humanPause(`closing sales trend for product ${index + 1}`, humanDelayConfig);
@@ -417,12 +464,36 @@ async function collectSalesByDateForRecord(page, index, record, targetDates, hum
   return salesByDate;
 }
 
+async function openSalesTrendForRecord(page, index, record, humanDelayConfig) {
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    await ensureSalesTrendDialogClosed(page);
+    await humanPause(`opening sales trend for product ${index + 1} (attempt ${attempt})`, humanDelayConfig);
+    const opened = await openSalesTrendDialog(page, record);
+    if (!opened) {
+      console.log(`Sales product ${index + 1}: 销售趋势 button was expected but could not be clicked (attempt ${attempt}).`);
+      continue;
+    }
+
+    const trendReady = await waitForSalesTrendDialog(page, 60000);
+    if (trendReady) {
+      await salesTrendRenderPause();
+      if (await evaluate(page, buildHasSalesTrendDialogScript())) {
+        return true;
+      }
+    }
+
+    console.log(`Sales product ${index + 1}: 销售趋势弹窗或图表没有完整加载 (attempt ${attempt}).`);
+    await forceCloseSalesTrendDialog(page);
+  }
+  return false;
+}
+
 async function openSalesTrendDialog(page, record) {
-  let point = await evaluate(page, buildSalesTrendPointScript(record.spuId));
+  let point = await evaluate(page, buildSalesTrendPointScript(record.locatorSkuId));
   if (!point?.x || !point?.y) {
-    await evaluate(page, buildScrollSalesRecordIntoViewScript(record.spuId));
+    await evaluate(page, buildScrollSalesRecordIntoViewScript(record.locatorSkuId));
     await sleep(500);
-    point = await evaluate(page, buildSalesTrendPointScript(record.spuId));
+    point = await evaluate(page, buildSalesTrendPointScript(record.locatorSkuId));
   }
   if (!point?.x || !point?.y) {
     return false;
@@ -444,27 +515,54 @@ async function waitForSalesTrendDialog(page, timeoutMs) {
 }
 
 async function readSalesTrendPoint(page, targetDate) {
+  const directRecord = JSON.parse(
+    (await evaluate(page, buildCollectSalesTrendSeriesDataScript(targetDate))) || 'null',
+  );
+  if (directRecord) {
+    return directRecord;
+  }
+
   const point = await evaluate(page, buildSalesTrendHoverPointScript(targetDate));
   if (!point?.x || !point?.y) {
     console.log(`Sales trend: unable to estimate hover point for ${targetDate}.`);
     return null;
   }
 
-  await page.send('Input.dispatchMouseEvent', {
-    type: 'mouseMoved',
-    x: point.x,
-    y: point.y,
-    button: 'none',
-    buttons: 0,
-  });
-  await sleep(700);
-  const rawRecord = await evaluate(page, buildCollectSalesTrendTooltipScript(targetDate));
-  const record = JSON.parse(rawRecord || 'null');
-  if (!record) {
-    console.log(`Sales trend: tooltip for ${targetDate} was not readable after hover.`);
-    return null;
+  const offsets = [0, -2, 2, -4, 4, -6, 6];
+  for (const offset of offsets) {
+    await moveMouseAwayFromSalesTrend(page);
+    for (const x of [point.x - 60, point.x - 20, point.x + offset]) {
+      await page.send('Input.dispatchMouseEvent', {
+        type: 'mouseMoved',
+        x,
+        y: point.y,
+        button: 'none',
+        buttons: 0,
+      });
+      await sleep(180);
+    }
+
+    const record = await waitForSalesTrendTooltip(page, targetDate, 5000);
+    if (record) {
+      return record;
+    }
   }
-  return record;
+
+  console.log(`Sales trend: tooltip for ${targetDate} was not readable after multi-point hover retries.`);
+  return null;
+}
+
+async function waitForSalesTrendTooltip(page, targetDate, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const rawRecord = await evaluate(page, buildCollectSalesTrendTooltipScript(targetDate));
+    const record = JSON.parse(rawRecord || 'null');
+    if (record?.date === targetDate && record.sales !== null && record.sales !== undefined) {
+      return record;
+    }
+    await sleep(300);
+  }
+  return null;
 }
 
 async function closeSalesTrendDialog(page) {
@@ -1288,37 +1386,37 @@ function buildCollectSalesRecordsScript() {
   return browserFunction(() => JSON.stringify(collectVisibleSkuSalesRowsByCoordinates()));
 }
 
-function buildSalesTrendPointScript(spuId) {
-  return browserFunction((targetSpuId) => {
-    let records = collectVisibleSkuSalesRowsByCoordinates({ scrollTrendPointSpuId: targetSpuId });
-    let record = records.find((item) => item.spuId === targetSpuId);
+function buildSalesTrendPointScript(skuId) {
+  return browserFunction((targetSkuId) => {
+    let records = collectVisibleSkuSalesRowsByCoordinates({ scrollTrendPointSkuId: targetSkuId });
+    let record = records.find((item) => item.locatorSkuId === targetSkuId);
     if (record?.salesTrendPoint) {
       return record.salesTrendPoint;
     }
 
     const textItem = visibleTextItems()
-      .find((item) => item.text.includes(targetSpuId) && /SPU\s*[:：]/i.test(item.text));
+      .find((item) => item.text.includes(targetSkuId) && /SKU\s*ID\s*[:：]/i.test(item.text));
     if (textItem) {
       textItem.element.scrollIntoView({ block: 'center', inline: 'nearest' });
-      records = collectVisibleSkuSalesRowsByCoordinates({ scrollTrendPointSpuId: targetSpuId });
-      record = records.find((item) => item.spuId === targetSpuId);
+      records = collectVisibleSkuSalesRowsByCoordinates({ scrollTrendPointSkuId: targetSkuId });
+      record = records.find((item) => item.locatorSkuId === targetSkuId);
     }
 
     return record?.salesTrendPoint || null;
-  }, spuId);
+  }, skuId);
 }
 
-function buildScrollSalesRecordIntoViewScript(spuId) {
-  return browserFunction((targetSpuId) => {
+function buildScrollSalesRecordIntoViewScript(skuId) {
+  return browserFunction((targetSkuId) => {
     const item = visibleTextItems()
-      .find((textItem) => textItem.text.includes(targetSpuId) && /SPU\s*[:：]/i.test(textItem.text));
+      .find((textItem) => textItem.text.includes(targetSkuId) && /SKU\s*ID\s*[:：]/i.test(textItem.text));
     if (!item) {
       return false;
     }
 
     item.element.scrollIntoView({ block: 'center', inline: 'nearest' });
     return true;
-  }, spuId);
+  }, skuId);
 }
 
 function buildSalesTrendHoverPointScript(targetDate) {
@@ -1410,6 +1508,94 @@ function buildSalesTrendHoverPointScript(targetDate) {
         value: normalized,
         time: new Date(`${normalized}T00:00:00+08:00`).getTime(),
       };
+    }
+  }, targetDate);
+}
+
+function buildCollectSalesTrendSeriesDataScript(targetDate) {
+  return browserFunction((wantedDate) => {
+    const modal = findSalesTrendModal();
+    const api = window.echarts;
+    if (!modal || !api) {
+      return JSON.stringify(null);
+    }
+
+    const chartElements = Array.from(modal.querySelectorAll('*'))
+      .filter((element) => element.hasAttribute('_echarts_instance_'));
+    for (const element of chartElements) {
+      const instance = typeof api.getInstanceByDom === 'function' ? api.getInstanceByDom(element) : null;
+      const option = instance && typeof instance.getOption === 'function' ? instance.getOption() : null;
+      if (!option) {
+        continue;
+      }
+
+      const axes = Array.isArray(option.xAxis) ? option.xAxis : [option.xAxis].filter(Boolean);
+      const seriesItems = Array.isArray(option.series) ? option.series : [option.series].filter(Boolean);
+      const categories = axes.flatMap((axis) => Array.isArray(axis?.data) ? axis.data : []);
+
+      for (const series of seriesItems) {
+        if (series?.name && !String(series.name).includes('销量')) {
+          continue;
+        }
+        const data = Array.isArray(series?.data) ? series.data : [];
+
+        const categoryIndex = categories.findIndex((value) => normalizeChartDate(value) === wantedDate);
+        if (categoryIndex >= 0 && categoryIndex < data.length) {
+          const sales = salesValue(data[categoryIndex]);
+          if (sales !== null) {
+            return JSON.stringify({ date: wantedDate, sales, source: 'sales-trend-series' });
+          }
+        }
+
+        for (const item of data) {
+          const itemDate = normalizeChartDate(item?.name)
+            || normalizeChartDate(Array.isArray(item?.value) ? item.value[0] : null);
+          if (itemDate !== wantedDate) {
+            continue;
+          }
+          const sales = salesValue(item);
+          if (sales !== null) {
+            return JSON.stringify({ date: wantedDate, sales, source: 'sales-trend-series' });
+          }
+        }
+      }
+    }
+
+    return JSON.stringify(null);
+
+    function normalizeChartDate(value) {
+      if (value === null || value === undefined || value === '') {
+        return '';
+      }
+      if (typeof value === 'number' && value > 100000000000) {
+        return formatDate(new Date(value));
+      }
+      const text = String(value).trim();
+      let match = text.match(/^(\d{4})[-/]([01]?\d)[-/]([0-3]?\d)$/);
+      if (match) {
+        return `${match[1]}-${String(Number(match[2])).padStart(2, '0')}-${String(Number(match[3])).padStart(2, '0')}`;
+      }
+      match = text.match(/^([01]?\d)[-/]([0-3]?\d)$/);
+      if (match) {
+        return `${wantedDate.slice(0, 4)}-${String(Number(match[1])).padStart(2, '0')}-${String(Number(match[2])).padStart(2, '0')}`;
+      }
+      return '';
+    }
+
+    function formatDate(date) {
+      if (!Number.isFinite(date.getTime())) {
+        return '';
+      }
+      return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+    }
+
+    function salesValue(item) {
+      let value = item?.value ?? item;
+      if (Array.isArray(value)) {
+        value = value[value.length - 1];
+      }
+      const number = Number(value);
+      return Number.isFinite(number) && number >= 0 ? String(number) : null;
     }
   }, targetDate);
 }
@@ -2244,93 +2430,85 @@ function browserHelpers() {
         .map((item) => ({ ...item, skuMatch: item.text.match(/^SKU\s*ID\s*[:：]\s*(\d+)$/i) }))
         .filter((item) => item.skuMatch)
         .sort((a, b) => a.rect.top - b.rect.top);
+      const skuCargoItems = textItems
+        .map((item) => ({ ...item, skuCargoMatch: item.text.match(/^SKU货号\s*[:：]\s*(\S+)$/) }))
+        .filter((item) => item.skuCargoMatch)
+        .sort((a, b) => a.rect.top - b.rect.top);
       const skcCargoItems = textItems
         .map((item) => ({ ...item, skcCargoMatch: item.text.match(/^SKC货号\s*[:：]\s*(.+)$/) }))
         .filter((item) => item.skcCargoMatch)
-        .sort((a, b) => a.rect.top - b.rect.top);
-      const spuItems = textItems
-        .map((item) => ({ ...item, spuMatch: item.text.match(/^SPU\s*[:：]\s*(\d+)$/i) }))
-        .filter((item) => item.spuMatch)
         .sort((a, b) => a.rect.top - b.rect.top);
       const totalItems = textItems
         .filter((item) => item.text === '合计')
         .sort((a, b) => a.rect.top - b.rect.top);
 
-      if (spuItems.length === 0 || totalItems.length === 0) {
+      if (skuItems.length === 0 || skuCargoItems.length === 0 || totalItems.length === 0) {
         return [];
       }
 
       const records = [];
-      let recordIndex = 0;
       let previousTotalY = -Infinity;
       for (const totalItem of totalItems) {
         const totalY = centerY(totalItem.rect);
-        const groupedSpuItems = spuItems.filter((spuItem) => {
-          const spuY = centerY(spuItem.rect);
-          return spuY > previousTotalY && spuY < totalY;
-        });
-        const groupedSkcCargoItems = skcCargoItems.filter((skcCargoItem) => {
-          const skcCargoY = centerY(skcCargoItem.rect);
-          return skcCargoY > previousTotalY && skcCargoY < totalY;
-        });
-        const groupedSkus = skuItems.filter((skuItem) => {
+        const groupedSkuItems = skuItems.filter((skuItem) => {
           const skuY = centerY(skuItem.rect);
           return skuY > previousTotalY && skuY < totalY;
         });
-
-        if (groupedSpuItems.length === 0) {
+        const groupedSkuCargoItems = skuCargoItems.filter((skuCargoItem) => {
+          const skuCargoY = centerY(skuCargoItem.rect);
+          return skuCargoY > previousTotalY && skuCargoY < totalY;
+        });
+        if (groupedSkuItems.length === 0 || groupedSkuCargoItems.length === 0) {
           previousTotalY = totalY;
           continue;
         }
 
         const todayCell = findCellAtColumn(textItems, totalItem.rect, todayX);
         const totalRowText = buildRowText(textItems, totalItem.rect);
-        const skuIds = Array.from(new Set(groupedSkus.map((skuItem) => skuItem.skuMatch[1])));
-        const skcCargoNos = Array.from(new Set(groupedSkcCargoItems.map((skcCargoItem) => skcCargoItem.skcCargoMatch[1].trim())));
-        const uniqueSpuItems = uniqueItemsBy(groupedSpuItems, (spuItem) => spuItem.spuMatch[1]);
-        for (let spuIndex = 0; spuIndex < uniqueSpuItems.length; spuIndex += 1) {
-          const spuItem = uniqueSpuItems[spuIndex];
-          const salesTrendItem = findSalesTrendItemForSpu(textItems, previousTotalY, totalY, uniqueSpuItems, spuIndex);
-          const spuId = spuItem.spuMatch[1];
-          const shouldScrollTrendPoint = options.scrollTrendPointSpuId === spuId;
-          records.push({
-            spuId,
-            skuIds,
-            skcCargoNos,
-            todaySales: todayCell?.text || '',
-            productText: buildNearbyText(textItems, spuItem.rect),
-            totalRowText,
-            hasSalesTrend: Boolean(salesTrendItem),
-            salesTrendPoint: salesTrendItem
-              ? (shouldScrollTrendPoint ? viewportPointForElement(salesTrendItem.element) : viewportPointForVisibleElement(salesTrendItem.element))
-              : null,
-            source: 'cdp-coordinate-total-row',
-          });
-          recordIndex += 1;
-        }
-
+        const groupedSkcCargoItems = skcCargoItems.filter((skcCargoItem) => {
+          const skcCargoY = centerY(skcCargoItem.rect);
+          return skcCargoY > previousTotalY && skcCargoY < totalY;
+        });
+        const salesTrendItem = textItems
+          .filter((item) => item.text === '销售趋势')
+          .filter((item) => {
+            const y = centerY(item.rect);
+            return y > previousTotalY && y < totalY;
+          })
+          .sort((a, b) => b.rect.left - a.rect.left || a.rect.top - b.rect.top)[0] || null;
+        const skuIds = Array.from(new Set(groupedSkuItems.map((skuItem) => skuItem.skuMatch[1])));
+        const rawSkuCargoNos = Array.from(
+          new Set(groupedSkuCargoItems.map((skuCargoItem) => skuCargoItem.skuCargoMatch[1].trim())),
+        );
+        const skuCargoNos = Array.from(
+          new Set(rawSkuCargoNos.map((value) => value.replace(/\D+/g, '')).filter(Boolean)),
+        );
+        const skcCargoNos = Array.from(
+          new Set(groupedSkcCargoItems.map((skcCargoItem) => skcCargoItem.skcCargoMatch[1].trim())),
+        );
+        const locatorSkuId = skuIds[0] || '';
+        const skuCargoNo = skuCargoNos[0] || '';
+        const shouldScrollTrendPoint = options.scrollTrendPointSkuId === locatorSkuId;
+        records.push({
+          skuCargoNo,
+          skuCargoNos,
+          rawSkuCargoNos,
+          locatorSkuId,
+          skuIds,
+          skcCargoNos,
+          todaySales: todayCell?.text || '',
+          productText: buildNearbyText(textItems, groupedSkuCargoItems[0].rect),
+          totalRowText,
+          hasSalesTrend: Boolean(salesTrendItem),
+          salesTrendPoint: salesTrendItem
+            ? (shouldScrollTrendPoint ? viewportPointForElement(salesTrendItem.element) : viewportPointForVisibleElement(salesTrendItem.element))
+            : null,
+          source: 'cdp-coordinate-total-row',
+        });
         previousTotalY = totalY;
       }
 
       return records;
-    }
-
-    function findSalesTrendItemForSpu(textItems, groupTopY, groupBottomY, spuItems, spuIndex) {
-      const current = spuItems[spuIndex];
-      const currentY = centerY(current.rect);
-      const previous = spuItems[spuIndex - 1];
-      const next = spuItems[spuIndex + 1];
-      const rowTopY = previous ? (centerY(previous.rect) + currentY) / 2 : groupTopY;
-      const rowBottomY = next ? (currentY + centerY(next.rect)) / 2 : groupBottomY;
-
-      const candidates = textItems
-        .filter((item) => item.text === '销售趋势')
-        .filter((item) => {
-          const y = centerY(item.rect);
-          return y > rowTopY && y < rowBottomY;
-        })
-        .sort((a, b) => b.rect.left - a.rect.left || a.rect.top - b.rect.top);
-      return candidates[0] || null;
     }
 
     function viewportPointForVisibleElement(element) {
@@ -2340,22 +2518,6 @@ function browserHelpers() {
         x: rect.left + rect.width / 2,
         y: rect.top + rect.height / 2,
       };
-    }
-
-    function uniqueItemsBy(items, keyFn) {
-      const seen = new Set();
-      const unique = [];
-      for (const item of items) {
-        const key = keyFn(item);
-        if (seen.has(key)) {
-          continue;
-        }
-
-        seen.add(key);
-        unique.push(item);
-      }
-
-      return unique;
     }
 
     function trafficDetailButtons() {
@@ -2591,6 +2753,36 @@ async function humanPause(label, config) {
   const delayMs = randomHumanDelayMs(config);
   console.log(`Human-like pause before ${label}: ${(delayMs / 1000).toFixed(1)} seconds`);
   await sleep(delayMs);
+}
+
+async function salesTrendRenderPause() {
+  const minSeconds = readNonNegativeInteger(
+    process.env.SALES_TREND_RENDER_DELAY_MIN_SECONDS,
+    DEFAULT_SALES_TREND_RENDER_DELAY_MIN_SECONDS,
+    'SALES_TREND_RENDER_DELAY_MIN_SECONDS',
+  );
+  const maxSeconds = readNonNegativeInteger(
+    process.env.SALES_TREND_RENDER_DELAY_MAX_SECONDS,
+    DEFAULT_SALES_TREND_RENDER_DELAY_MAX_SECONDS,
+    'SALES_TREND_RENDER_DELAY_MAX_SECONDS',
+  );
+  if (minSeconds > maxSeconds) {
+    throw new Error('SALES_TREND_RENDER_DELAY_MIN_SECONDS must be less than or equal to SALES_TREND_RENDER_DELAY_MAX_SECONDS');
+  }
+  const delayMs = minSeconds * 1000 + Math.floor(Math.random() * ((maxSeconds - minSeconds) * 1000 + 1));
+  console.log(`Waiting ${(delayMs / 1000).toFixed(1)} seconds for the sales trend chart to finish rendering...`);
+  await sleep(delayMs);
+}
+
+function readNonNegativeInteger(value, fallback, name) {
+  if (value === undefined || value === '') {
+    return fallback;
+  }
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    throw new Error(`${name} must be a non-negative integer`);
+  }
+  return parsed;
 }
 
 main().catch((error) => {

@@ -27,6 +27,13 @@ __pycache__/
 *.py[cod]
 .pycache/
 scripts/__pycache__/
+.venv/
+venv/
+
+# Local Chrome/CDP profiles
+browser-profile/
+chrome-profile/
+seller-central-profiles/
 
 # Local account configs
 accounts.json

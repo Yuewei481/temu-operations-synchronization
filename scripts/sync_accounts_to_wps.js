@@ -1,9 +1,25 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, isAbsolute, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { loadEnvFile } from './config.js';
 import { syncOneAccount } from './sync_collect_to_wps.js';
 
 const DEFAULT_ACCOUNTS_PATH = 'accounts.json';
+const ACCOUNT_TARGET_ENV_KEYS = [
+  'SKU_SALES_EXCEL_PATH',
+  'LOCAL_TARGET_EXCEL_PATH',
+  'LOCAL_TARGET_EXCEL_SHEET_NAME',
+  'LOCAL_TARGET_DATE_COLUMN',
+  'LOCAL_TARGET_NAME_COLUMN',
+  'LOCAL_TARGET_SALES_COLUMN',
+  'LOCAL_TARGET_START_ROW',
+  'WPS_DOC_URL',
+  'WPS_SHEET_NAME',
+  'WPS_DATE_COLUMN',
+  'WPS_NAME_COLUMN',
+  'WPS_SALES_COLUMN',
+  'WPS_START_ROW',
+];
 
 async function main() {
   const fileEnv = await loadEnvFile('.env').catch(() => ({}));
@@ -31,7 +47,7 @@ async function main() {
     configSource = '.env';
   } else {
     throw new Error(
-      `No account config found. Create accounts.json, pass a config path, or add ACCOUNT_1_SOURCE_EXCEL / ACCOUNT_1_GROUP_TITLE / ACCOUNT_1_CHROME_PROFILE to .env.`,
+      `No account config found. Create accounts.json, pass a config path, or add ACCOUNT_1_SOURCE_EXCEL / ACCOUNT_1_CHROME_PROFILE to .env.`,
     );
   }
 
@@ -64,7 +80,7 @@ function loadAccountsConfig(accountsPath) {
   }
 }
 
-function readAccountsFromEnv(env) {
+export function readAccountsFromEnv(env) {
   const indexes = readAccountIndexes(env);
   return indexes.map((index) => ({
     name: env[`ACCOUNT_${index}_NAME`],
@@ -72,18 +88,31 @@ function readAccountsFromEnv(env) {
     cdpOrigin: env[`ACCOUNT_${index}_CDP_ORIGIN`],
     chromeProfile: env[`ACCOUNT_${index}_CHROME_PROFILE`] || env[`ACCOUNT_${index}_CDP_USER_DATA_DIR`],
     sourceExcel: env[`ACCOUNT_${index}_SOURCE_EXCEL`] || env[`ACCOUNT_${index}_SOURCE_EXCEL_PATH`],
-    sourceExcelSpuColumn:
-      env[`ACCOUNT_${index}_SOURCE_EXCEL_SPU_COLUMN`] || env[`ACCOUNT_${index}_SOURCE_SPU_COLUMN`],
+    sourceExcelSkuCargoPrimaryColumn:
+      env[`ACCOUNT_${index}_SOURCE_EXCEL_SKU_CARGO_PRIMARY_COLUMN`] ||
+      env[`ACCOUNT_${index}_SOURCE_EXCEL_SKU_CARGO_COLUMN`] ||
+      env[`ACCOUNT_${index}_SOURCE_EXCEL_SPU_COLUMN`] ||
+      env[`ACCOUNT_${index}_SOURCE_SPU_COLUMN`],
+    sourceExcelSkuCargoSecondaryColumn:
+      env[`ACCOUNT_${index}_SOURCE_EXCEL_SKU_CARGO_SECONDARY_COLUMN`],
     sourceExcelNameColumn:
       env[`ACCOUNT_${index}_SOURCE_EXCEL_NAME_COLUMN`] || env[`ACCOUNT_${index}_SOURCE_NAME_COLUMN`],
     sourceExcelImageColumn:
       env[`ACCOUNT_${index}_SOURCE_EXCEL_IMAGE_COLUMN`] || env[`ACCOUNT_${index}_SOURCE_IMAGE_COLUMN`],
-    groupTitle:
-      env[`ACCOUNT_${index}_GROUP_TITLE`] ||
-      env[`ACCOUNT_${index}_WPS_GROUP_TITLE`] ||
-      env[`ACCOUNT_${index}_WPS_STORE_GROUP_TITLE`],
+    exportExcelPath:
+      env[`ACCOUNT_${index}_EXPORT_EXCEL_PATH`] || env[`ACCOUNT_${index}_SKU_SALES_EXCEL_PATH`],
+    targetExcelPath: env[`ACCOUNT_${index}_TARGET_EXCEL_PATH`],
+    targetExcelSheetName: env[`ACCOUNT_${index}_TARGET_EXCEL_SHEET_NAME`],
+    targetExcelDateColumn: env[`ACCOUNT_${index}_TARGET_EXCEL_DATE_COLUMN`],
+    targetExcelNameColumn: env[`ACCOUNT_${index}_TARGET_EXCEL_NAME_COLUMN`],
+    targetExcelSalesColumn: env[`ACCOUNT_${index}_TARGET_EXCEL_SALES_COLUMN`],
+    targetExcelStartRow: env[`ACCOUNT_${index}_TARGET_EXCEL_START_ROW`],
     wpsDocUrl: env[`ACCOUNT_${index}_WPS_DOC_URL`],
     wpsSheetName: env[`ACCOUNT_${index}_WPS_SHEET_NAME`],
+    wpsDateColumn: env[`ACCOUNT_${index}_WPS_DATE_COLUMN`],
+    wpsNameColumn: env[`ACCOUNT_${index}_WPS_NAME_COLUMN`],
+    wpsSalesColumn: env[`ACCOUNT_${index}_WPS_SALES_COLUMN`],
+    wpsStartRow: env[`ACCOUNT_${index}_WPS_START_ROW`],
     sellerPhoneCountryCode: env[`ACCOUNT_${index}_SELLER_PHONE_COUNTRY_CODE`],
     sellerPhone: env[`ACCOUNT_${index}_SELLER_PHONE`],
     sellerPassword: env[`ACCOUNT_${index}_SELLER_PASSWORD`],
@@ -127,20 +156,32 @@ function readAccountIndexes(env) {
   return [...indexes].sort((a, b) => a - b);
 }
 
-function normalizeAccount(rawAccount, configDir, index, baseEnv = process.env) {
+export function normalizeAccount(rawAccount, configDir, index, baseEnv = process.env) {
   if (!rawAccount || typeof rawAccount !== 'object') {
     throw new Error(`Account at index ${index} must be an object.`);
   }
 
-  const name = rawAccount.name || rawAccount.groupTitle || `Account ${index + 1}`;
+  const name = rawAccount.name || `Account ${index + 1}`;
+  const outputMode = parseOutputMode(rawAccount.outputMode || baseEnv.OUTPUT_MODE);
   const cdpPort = String(rawAccount.cdpPort || rawAccount.port || 9222 + index);
   const cdpOrigin = rawAccount.cdpOrigin || `http://127.0.0.1:${cdpPort}`;
   const sourceExcel = resolveConfigPath(rawAccount.sourceExcel || rawAccount.sourceExcelPath, configDir);
   const chromeProfile = resolveConfigPath(rawAccount.chromeProfile || rawAccount.cdpUserDataDir, configDir);
-  const groupTitle = rawAccount.groupTitle || rawAccount.wpsGroupTitle || rawAccount.storeGroupTitle;
-  const sourceExcelSpuColumn = rawAccount.sourceExcelSpuColumn || rawAccount.sourceSpuColumn;
+  const sourceExcelSkuCargoPrimaryColumn =
+    rawAccount.sourceExcelSkuCargoPrimaryColumn ||
+    rawAccount.sourceExcelSkuCargoColumn ||
+    rawAccount.sourceExcelSpuColumn ||
+    rawAccount.sourceSpuColumn ||
+    'A';
+  const sourceExcelSkuCargoSecondaryColumn = rawAccount.sourceExcelSkuCargoSecondaryColumn || 'B';
   const sourceExcelNameColumn = rawAccount.sourceExcelNameColumn || rawAccount.sourceNameColumn;
   const sourceExcelImageColumn = rawAccount.sourceExcelImageColumn || rawAccount.sourceImageColumn;
+  const exportExcelPath = outputMode === 1
+    ? resolveConfigPath(rawAccount.exportExcelPath || rawAccount.skuSalesExcelPath, configDir)
+    : '';
+  const targetExcelPath = outputMode === 2
+    ? resolveConfigPath(rawAccount.targetExcelPath, configDir)
+    : '';
 
   if (!sourceExcel) {
     throw new Error(`Account "${name}" is missing sourceExcel.`);
@@ -148,22 +189,50 @@ function normalizeAccount(rawAccount, configDir, index, baseEnv = process.env) {
   if (!chromeProfile) {
     throw new Error(`Account "${name}" is missing chromeProfile.`);
   }
-  if (!groupTitle) {
-    throw new Error(`Account "${name}" is missing groupTitle.`);
+
+  validateModeSpecificAccount(rawAccount, {
+    name,
+    outputMode,
+    exportExcelPath,
+    targetExcelPath,
+  });
+
+  const extraEnv = { ...(rawAccount.env || {}) };
+  for (const key of ACCOUNT_TARGET_ENV_KEYS) {
+    delete extraEnv[key];
   }
+  delete extraEnv.OUTPUT_MODE;
 
   const accountEnv = stringifyEnv({
+    ...extraEnv,
     CDP_PORT: cdpPort,
     CDP_ORIGIN: cdpOrigin,
     CDP_USER_DATA_DIR: chromeProfile,
     SOURCE_EXCEL_PATH: sourceExcel,
-    SOURCE_EXCEL_SPU_COLUMN: sourceExcelSpuColumn,
+    SOURCE_EXCEL_SKU_CARGO_PRIMARY_COLUMN: sourceExcelSkuCargoPrimaryColumn,
+    SOURCE_EXCEL_SKU_CARGO_SECONDARY_COLUMN: sourceExcelSkuCargoSecondaryColumn,
     SOURCE_EXCEL_NAME_COLUMN: sourceExcelNameColumn,
     SOURCE_EXCEL_IMAGE_COLUMN: sourceExcelImageColumn,
-    WPS_STORE_GROUP_TITLE: groupTitle,
-    WPS_GROUP_TITLE: groupTitle,
-    WPS_DOC_URL: rawAccount.wpsDocUrl,
-    WPS_SHEET_NAME: rawAccount.wpsSheetName,
+    OUTPUT_MODE: outputMode,
+    ...(outputMode === 1 ? {
+      SKU_SALES_EXCEL_PATH: exportExcelPath,
+    } : {}),
+    ...(outputMode === 2 ? {
+      LOCAL_TARGET_EXCEL_PATH: targetExcelPath,
+      LOCAL_TARGET_EXCEL_SHEET_NAME: rawAccount.targetExcelSheetName,
+      LOCAL_TARGET_DATE_COLUMN: rawAccount.targetExcelDateColumn,
+      LOCAL_TARGET_NAME_COLUMN: rawAccount.targetExcelNameColumn,
+      LOCAL_TARGET_SALES_COLUMN: rawAccount.targetExcelSalesColumn,
+      LOCAL_TARGET_START_ROW: rawAccount.targetExcelStartRow,
+    } : {}),
+    ...(outputMode === 3 ? {
+      WPS_DOC_URL: rawAccount.wpsDocUrl,
+      WPS_SHEET_NAME: rawAccount.wpsSheetName,
+      WPS_DATE_COLUMN: rawAccount.wpsDateColumn,
+      WPS_NAME_COLUMN: rawAccount.wpsNameColumn,
+      WPS_SALES_COLUMN: rawAccount.wpsSalesColumn,
+      WPS_START_ROW: rawAccount.wpsStartRow,
+    } : {}),
     SELLER_PHONE_COUNTRY_CODE: rawAccount.sellerPhoneCountryCode,
     SELLER_PHONE: rawAccount.sellerPhone,
     SELLER_PASSWORD: rawAccount.sellerPassword,
@@ -180,10 +249,13 @@ function normalizeAccount(rawAccount, configDir, index, baseEnv = process.env) {
     TRAFFIC_TARGET_DATES: rawAccount.trafficTargetDates,
     TRAFFIC_DATE_RANGE: rawAccount.trafficDateRange,
     PYTHON_BIN: rawAccount.pythonBin,
-    ...(rawAccount.env || {}),
   });
+  const inheritedEnv = { ...baseEnv };
+  for (const key of ACCOUNT_TARGET_ENV_KEYS) {
+    delete inheritedEnv[key];
+  }
   const env = stringifyEnv({
-    ...baseEnv,
+    ...inheritedEnv,
     ...accountEnv,
   });
 
@@ -192,13 +264,65 @@ function normalizeAccount(rawAccount, configDir, index, baseEnv = process.env) {
     sourceExcel,
     cdpPort,
     chromeProfile,
+    outputMode,
+    exportExcelPath,
+    targetExcelPath,
     env,
   };
 }
 
-function validateUniqueAccountSettings(accounts) {
+export function validateUniqueAccountSettings(accounts) {
   assertUnique(accounts, 'cdpPort', 'CDP port');
   assertUnique(accounts, 'chromeProfile', 'Chrome profile');
+  assertUniqueNonEmpty(accounts.filter((account) => account.outputMode === 1), 'exportExcelPath', 'export Excel path');
+  assertUniqueNonEmpty(accounts.filter((account) => account.outputMode === 2), 'targetExcelPath', 'target Excel path');
+}
+
+export function parseOutputMode(value) {
+  const mode = Number.parseInt(String(value || '').trim(), 10);
+  if (![1, 2, 3].includes(mode)) {
+    throw new Error('OUTPUT_MODE must be 1 (export Excel), 2 (update local Excel), or 3 (update WPS Excel).');
+  }
+  return mode;
+}
+
+function validateModeSpecificAccount(rawAccount, account) {
+  const { name, outputMode, exportExcelPath, targetExcelPath } = account;
+  if (outputMode === 1) {
+    requireSetting(exportExcelPath, name, 'exportExcelPath (ACCOUNT_n_EXPORT_EXCEL_PATH)');
+    return;
+  }
+
+  if (outputMode === 2) {
+    requireSetting(targetExcelPath, name, 'targetExcelPath (ACCOUNT_n_TARGET_EXCEL_PATH)');
+    requireSetting(rawAccount.targetExcelSheetName, name, 'targetExcelSheetName');
+    requireSetting(rawAccount.targetExcelDateColumn, name, 'targetExcelDateColumn');
+    requireSetting(rawAccount.targetExcelNameColumn, name, 'targetExcelNameColumn');
+    requireSetting(rawAccount.targetExcelSalesColumn, name, 'targetExcelSalesColumn');
+    requirePositiveInteger(rawAccount.targetExcelStartRow, name, 'targetExcelStartRow');
+    return;
+  }
+
+  requireSetting(rawAccount.wpsDocUrl, name, 'wpsDocUrl (ACCOUNT_n_WPS_DOC_URL)');
+  requireSetting(rawAccount.wpsSheetName, name, 'wpsSheetName');
+  requireSetting(rawAccount.wpsDateColumn, name, 'wpsDateColumn');
+  requireSetting(rawAccount.wpsNameColumn, name, 'wpsNameColumn');
+  requireSetting(rawAccount.wpsSalesColumn, name, 'wpsSalesColumn');
+  requirePositiveInteger(rawAccount.wpsStartRow, name, 'wpsStartRow');
+}
+
+function requireSetting(value, accountName, settingName) {
+  if (!String(value || '').trim()) {
+    throw new Error(`Account "${accountName}" is missing ${settingName} for the selected OUTPUT_MODE.`);
+  }
+}
+
+function requirePositiveInteger(value, accountName, settingName) {
+  requireSetting(value, accountName, settingName);
+  const number = Number.parseInt(String(value), 10);
+  if (!Number.isFinite(number) || number < 1) {
+    throw new Error(`Account "${accountName}" has invalid ${settingName}: ${value}`);
+  }
 }
 
 function assertUnique(accounts, key, label) {
@@ -214,6 +338,10 @@ function assertUnique(accounts, key, label) {
       `${label} "${value}" is used by both "${seen.get(value)}" and "${account.name}". Use a separate ${label} for each account.`,
     );
   }
+}
+
+function assertUniqueNonEmpty(accounts, key, label) {
+  assertUnique(accounts.filter((account) => account[key]), key, label);
 }
 
 function resolveConfigPath(value, configDir) {
@@ -233,7 +361,9 @@ function stringifyEnv(values) {
   );
 }
 
-main().catch((error) => {
-  console.error(error.message);
-  process.exitCode = 1;
-});
+if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
+  main().catch((error) => {
+    console.error(error.message);
+    process.exitCode = 1;
+  });
+}

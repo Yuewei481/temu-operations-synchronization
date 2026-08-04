@@ -7,7 +7,7 @@ from pathlib import Path
 
 from PIL import Image as PillowImage
 
-from export_sales_excel import INPUT_PATH, IMAGE_DIR, merge_rows_by_spu, read_source_excel
+from export_sales_excel import INPUT_PATH, IMAGE_DIR, merge_rows_by_sku_cargo, read_source_excel
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -30,7 +30,7 @@ def main():
 
 
 def build_append_rows(data, source_rows):
-    merged_rows = merge_rows_by_spu(data, source_rows)
+    merged_rows = merge_rows_by_sku_cargo(data, source_rows)
     rows = []
     for row in merged_rows:
         date = format_date(row.get("trafficDate") or "")
@@ -53,7 +53,7 @@ def build_append_rows(data, source_rows):
                 "sales": number_or_blank(row.get("todaySales")),
                 "exposure": number_or_blank(row.get("exposure")),
                 "clicks": number_or_blank(row.get("clicks")),
-                "spuId": row.get("spuId") or "",
+                "skuCargoNo": row.get("skuCargoNo") or "",
             }
         )
     return rows

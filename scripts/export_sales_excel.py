@@ -22,23 +22,23 @@ OUTPUT_PATH = PROJECT_ROOT / "output" / "sales-data.xlsx"
 IMAGE_DIR = PROJECT_ROOT / "output" / "excel-images"
 WPS_UPLOAD_IMAGE_MAX_SIZE = int(os.environ.get("WPS_UPLOAD_IMAGE_MAX_SIZE") or os.environ.get("WPS_UPLOAD_IMAGE_SIZE") or "140")
 
-HEADERS = ["图片", "SPU", "今日销量", "流量日期", "曝光量", "点击量", "名字"]
+HEADERS = ["图片", "SKU货号", "今日销量", "流量日期", "曝光量", "点击量", "名字"]
 
 
 def main():
     source_excel_path = source_excel_from_args()
     data = json.loads(INPUT_PATH.read_text(encoding="utf-8"))
     source_rows = read_source_excel(source_excel_path) if source_excel_path else None
-    rows = merge_rows_by_spu(data, source_rows)
+    rows = merge_rows_by_sku_cargo(data, source_rows)
 
     IMAGE_DIR.mkdir(parents=True, exist_ok=True)
     workbook = Workbook()
     sheet = workbook.active
-    sheet.title = "SPU数据"
+    sheet.title = "SKU货号数据"
     setup_sheet(sheet)
 
     for index, row in enumerate(rows, start=2):
-        sheet.cell(index, 2).value = row["spuId"]
+        sheet.cell(index, 2).value = row["skuCargoNo"]
         sheet.cell(index, 3).value = as_number(row.get("todaySales"))
         sheet.cell(index, 4).value = row.get("trafficDate") or ""
         sheet.cell(index, 5).value = as_number(row.get("exposure"))
@@ -51,7 +51,7 @@ def main():
         sheet.row_dimensions[index].height = 62
         image_path = row.get("sourceImagePath")
         if not image_path and not source_rows:
-            image_path = download_and_prepare_image(row.get("imageSrc"), row["spuId"])
+            image_path = download_and_prepare_image(row.get("imageSrc"), row["skuCargoNo"])
         if image_path:
             image = ExcelImage(str(image_path))
             image.width = 72
@@ -77,48 +77,64 @@ def read_source_excel(path):
     if not path.exists():
         raise FileNotFoundError(f"Input Excel not found: {path}")
 
-    image_by_dispimg_id = extract_cell_images(path)
     workbook = load_workbook(path, data_only=False)
     sheet = workbook.active
-    spu_column = source_spu_column()
+    primary_sku_cargo_column = source_primary_sku_cargo_column()
+    secondary_sku_cargo_column = source_secondary_sku_cargo_column()
     name_column = source_name_column()
     image_column = source_image_column()
+    image_by_dispimg_id = extract_cell_images(path) if image_column else {}
     source_rows = []
-    seen_spus = set()
+    seen_sku_cargo_numbers = set()
 
-    for row_index in range(1, sheet.max_row + 1):
-        spu_id = normalize_spu(sheet.cell(row_index, spu_column).value)
-        if not spu_id or spu_id in seen_spus:
-            continue
+    # Scan the complete primary column first so it always wins over the
+    # secondary column, even when a secondary match appears on an earlier row.
+    for sku_cargo_column in (primary_sku_cargo_column, secondary_sku_cargo_column):
+        for row_index in range(1, sheet.max_row + 1):
+            sku_cargo_no = normalize_sku_cargo_no(sheet.cell(row_index, sku_cargo_column).value)
+            if not sku_cargo_no or sku_cargo_no in seen_sku_cargo_numbers:
+                continue
 
-        seen_spus.add(spu_id)
-        name = sheet.cell(row_index, name_column).value or ""
-        image_id = extract_dispimg_id(sheet.cell(row_index, image_column).value)
-        source_rows.append({
-            "spuId": spu_id,
-            "name": str(name).strip(),
-            "sourceImagePath": image_by_dispimg_id.get(image_id),
-        })
+            seen_sku_cargo_numbers.add(sku_cargo_no)
+            name = sheet.cell(row_index, name_column).value or ""
+            image_id = extract_dispimg_id(sheet.cell(row_index, image_column).value) if image_column else ""
+            source_rows.append({
+                "skuCargoNo": sku_cargo_no,
+                "name": str(name).strip(),
+                "sourceImagePath": image_by_dispimg_id.get(image_id),
+            })
 
     return source_rows
 
 
-def source_spu_column():
-    value = os.environ.get("SOURCE_EXCEL_SPU_COLUMN", "A")
-    return column_name_to_index(value)
+def source_primary_sku_cargo_column():
+    value = (
+        os.environ.get("SOURCE_EXCEL_SKU_CARGO_PRIMARY_COLUMN")
+        or os.environ.get("SOURCE_EXCEL_SKU_CARGO_COLUMN")
+        or os.environ.get("SOURCE_EXCEL_SPU_COLUMN")
+        or "A"
+    )
+    return column_name_to_index(value, "SOURCE_EXCEL_SKU_CARGO_PRIMARY_COLUMN")
+
+
+def source_secondary_sku_cargo_column():
+    value = os.environ.get("SOURCE_EXCEL_SKU_CARGO_SECONDARY_COLUMN") or "B"
+    return column_name_to_index(value, "SOURCE_EXCEL_SKU_CARGO_SECONDARY_COLUMN")
 
 
 def source_name_column():
-    value = os.environ.get("SOURCE_EXCEL_NAME_COLUMN", "B")
+    value = os.environ.get("SOURCE_EXCEL_NAME_COLUMN", "C")
     return column_name_to_index(value, "SOURCE_EXCEL_NAME_COLUMN")
 
 
 def source_image_column():
-    value = os.environ.get("SOURCE_EXCEL_IMAGE_COLUMN", "C")
+    value = os.environ.get("SOURCE_EXCEL_IMAGE_COLUMN", "").strip()
+    if not value:
+        return None
     return column_name_to_index(value, "SOURCE_EXCEL_IMAGE_COLUMN")
 
 
-def column_name_to_index(value, env_name="SOURCE_EXCEL_SPU_COLUMN"):
+def column_name_to_index(value, env_name="SOURCE_EXCEL_SKU_CARGO_COLUMN"):
     text = str(value).strip().upper()
     if text.isdigit():
         column = int(text)
@@ -192,40 +208,39 @@ def extract_dispimg_id(value):
     return match.group(1) if match else ""
 
 
-def normalize_spu(value):
+def normalize_sku_cargo_no(value):
     if value is None:
         return ""
     if isinstance(value, float) and value.is_integer():
         value = int(value)
-    text = str(value).strip()
-    return text if re.fullmatch(r"\d+", text) else ""
+    return re.sub(r"\D+", "", str(value))
 
 
-def merge_rows_by_spu(data, source_rows=None):
-    sales_by_spu = {}
-    sales_by_spu_date = {}
-    traffic_by_spu = {}
+def merge_rows_by_sku_cargo(data, source_rows=None):
+    sales_by_sku_cargo = {}
+    sales_by_sku_cargo_date = {}
+    traffic_by_sku_cargo = {}
     order = []
 
     for sale in data.get("records", []):
-        spu_id = str(sale.get("spuId") or "").strip()
-        if not spu_id:
+        sku_cargo_no = normalize_sku_cargo_no(sale.get("skuCargoNo") or sale.get("spuId"))
+        if not sku_cargo_no:
             continue
-        if spu_id not in order:
-            order.append(spu_id)
-        sales_by_spu[spu_id] = sale.get("todaySales", "")
+        if sku_cargo_no not in order:
+            order.append(sku_cargo_no)
+        sales_by_sku_cargo[sku_cargo_no] = sale.get("todaySales", "")
         for sales_row in sale.get("salesByDate") or []:
             sales_date = sales_row.get("date")
             if sales_date:
-                sales_by_spu_date[(spu_id, sales_date)] = sales_row.get("sales", "")
+                sales_by_sku_cargo_date[(sku_cargo_no, sales_date)] = sales_row.get("sales", "")
 
     for traffic in data.get("trafficAnalysis", {}).get("records", []):
-        spu_id = str(traffic.get("spuId") or "").strip()
-        if not spu_id:
+        sku_cargo_no = normalize_sku_cargo_no(traffic.get("skuCargoNo"))
+        if not sku_cargo_no:
             continue
-        if spu_id not in order:
-            order.append(spu_id)
-        traffic_by_spu.setdefault(spu_id, []).append(
+        if sku_cargo_no not in order:
+            order.append(sku_cargo_no)
+        traffic_by_sku_cargo.setdefault(sku_cargo_no, []).append(
             {
                 "trafficDate": traffic.get("date", ""),
                 "exposure": traffic.get("exposure", ""),
@@ -236,26 +251,38 @@ def merge_rows_by_spu(data, source_rows=None):
 
     if source_rows is None:
         rows = []
-        for spu_id in order:
-            base = {"spuId": spu_id, "todaySales": sales_by_spu.get(spu_id, "")}
-            traffic_rows = traffic_by_spu.get(spu_id) or [{}]
+        for sku_cargo_no in order:
+            base = {"skuCargoNo": sku_cargo_no, "todaySales": sales_by_sku_cargo.get(sku_cargo_no, "")}
+            dated_sales_rows = sales_rows_for_sku_cargo(sku_cargo_no, sales_by_sku_cargo_date)
+            traffic_rows = traffic_by_sku_cargo.get(sku_cargo_no) or dated_sales_rows or [{}]
             for traffic_row in traffic_rows:
                 rows.append({
                     **base,
                     **traffic_row,
-                    "todaySales": sale_for_traffic_date(spu_id, traffic_row, sales_by_spu_date, sales_by_spu),
+                    "todaySales": sale_for_traffic_date(
+                        sku_cargo_no,
+                        traffic_row,
+                        sales_by_sku_cargo_date,
+                        sales_by_sku_cargo,
+                    ),
                 })
         return rows
 
     rows = []
     for source_row in source_rows:
-        spu_id = source_row["spuId"]
-        traffic_rows = traffic_by_spu.get(spu_id) or [{}]
+        sku_cargo_no = source_row["skuCargoNo"]
+        dated_sales_rows = sales_rows_for_sku_cargo(sku_cargo_no, sales_by_sku_cargo_date)
+        traffic_rows = traffic_by_sku_cargo.get(sku_cargo_no) or dated_sales_rows or [{}]
         for traffic_row in traffic_rows:
             row = {
                 **source_row,
-                "spuId": spu_id,
-                "todaySales": sale_for_traffic_date(spu_id, traffic_row, sales_by_spu_date, sales_by_spu),
+                "skuCargoNo": sku_cargo_no,
+                "todaySales": sale_for_traffic_date(
+                    sku_cargo_no,
+                    traffic_row,
+                    sales_by_sku_cargo_date,
+                    sales_by_sku_cargo,
+                ),
                 **traffic_row,
             }
             row["name"] = source_row.get("name") or ""
@@ -264,11 +291,22 @@ def merge_rows_by_spu(data, source_rows=None):
     return rows
 
 
-def sale_for_traffic_date(spu_id, traffic_row, sales_by_spu_date, sales_by_spu):
+def sales_rows_for_sku_cargo(sku_cargo_no, sales_by_sku_cargo_date):
+    return [
+        {"trafficDate": sales_date}
+        for code, sales_date in sales_by_sku_cargo_date
+        if code == sku_cargo_no
+    ]
+
+
+def sale_for_traffic_date(sku_cargo_no, traffic_row, sales_by_sku_cargo_date, sales_by_sku_cargo):
     traffic_date = (traffic_row or {}).get("trafficDate") or (traffic_row or {}).get("date") or ""
     if traffic_date:
-        return sales_by_spu_date.get((spu_id, traffic_date), sales_by_spu.get(spu_id, ""))
-    return sales_by_spu.get(spu_id, "")
+        return sales_by_sku_cargo_date.get(
+            (sku_cargo_no, traffic_date),
+            sales_by_sku_cargo.get(sku_cargo_no, ""),
+        )
+    return sales_by_sku_cargo.get(sku_cargo_no, "")
 
 
 def setup_sheet(sheet):
@@ -287,12 +325,12 @@ def setup_sheet(sheet):
     sheet.auto_filter.ref = "A1:G1"
 
 
-def download_and_prepare_image(url, spu_id):
+def download_and_prepare_image(url, sku_cargo_no):
     if not url:
         return None
 
-    safe_spu = re.sub(r"[^0-9A-Za-z_-]+", "_", spu_id)
-    output_path = IMAGE_DIR / f"{safe_spu}.png"
+    safe_sku_cargo_no = re.sub(r"[^0-9A-Za-z_-]+", "_", sku_cargo_no)
+    output_path = IMAGE_DIR / f"{safe_sku_cargo_no}.png"
     if output_path.exists():
         return output_path
 
@@ -303,8 +341,12 @@ def download_and_prepare_image(url, spu_id):
         save_prepared_image(BytesIO(raw), output_path)
         return output_path
     except Exception as error:
-        print(f"Image skipped for SPU {spu_id}: {error}")
+        print(f"Image skipped for SKU货号 {sku_cargo_no}: {error}")
         return None
+
+
+# Backward-compatible import for older helper scripts.
+merge_rows_by_spu = merge_rows_by_sku_cargo
 
 
 def prepare_local_image(path, image_id):

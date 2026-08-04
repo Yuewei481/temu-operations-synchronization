@@ -141,8 +141,19 @@ export class CdpPage {
     this.opened = new Promise((resolve, reject) => {
       this.socket.addEventListener('open', resolve, { once: true });
       this.socket.addEventListener('error', reject, { once: true });
+      this.socket.addEventListener(
+        'close',
+        () => reject(new Error('Chrome CDP target closed before the connection was ready.')),
+        { once: true },
+      );
     });
     this.socket.addEventListener('message', (event) => this.handleMessage(event));
+    this.socket.addEventListener('error', () => {
+      this.failPending(new Error('Chrome CDP target connection failed.'));
+    });
+    this.socket.addEventListener('close', () => {
+      this.failPending(new Error('Inspected Chrome target navigated or closed.'));
+    });
   }
 
   async close() {
@@ -153,6 +164,9 @@ export class CdpPage {
 
   async send(method, params = {}) {
     await this.opened;
+    if (this.socket.readyState !== WebSocket.OPEN) {
+      throw new Error('Chrome CDP target is no longer open.');
+    }
     const id = this.nextId;
     this.nextId += 1;
     const message = { id, method, params };
@@ -227,5 +241,12 @@ export class CdpPage {
     }
 
     pending.resolve(payload.result);
+  }
+
+  failPending(error) {
+    for (const { reject } of this.pending.values()) {
+      reject(error);
+    }
+    this.pending.clear();
   }
 }
