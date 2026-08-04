@@ -3,6 +3,7 @@ import { dirname, isAbsolute, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadEnvFile } from './config.js';
 import { syncOneAccount } from './sync_collect_to_wps.js';
+import { closeCdpBrowser, getCdpOrigin } from './cdp_client.js';
 
 const DEFAULT_ACCOUNTS_PATH = 'accounts.json';
 const ACCOUNT_TARGET_ENV_KEYS = [
@@ -69,7 +70,28 @@ async function main() {
     });
   }
 
+  const { isSheinEnabled, readSheinAccountsFromEnv } = await import('./shein_account_config.js');
+  if (isSheinEnabled(baseEnv)) {
+    console.log('\nSHEIN follow-up is enabled. Closing all configured TEMU Chrome sessions first...');
+    await closeConfiguredBrowsers(normalizedAccounts);
+    const sheinAccounts = readSheinAccountsFromEnv(baseEnv, process.cwd());
+    const { syncSheinAccounts } = await import('./sync_shein_accounts.js');
+    await syncSheinAccounts(sheinAccounts);
+  }
+
   console.log('\nAll account sync tasks finished.');
+}
+
+async function closeConfiguredBrowsers(accounts) {
+  for (const account of accounts) {
+    const origin = getCdpOrigin(account.env);
+    try {
+      const closed = await closeCdpBrowser(origin);
+      console.log(closed ? `Closed TEMU Chrome at ${origin}.` : `No TEMU Chrome to close at ${origin}.`);
+    } catch (error) {
+      console.log(`Unable to close TEMU Chrome at ${origin}: ${error.message}`);
+    }
+  }
 }
 
 function loadAccountsConfig(accountsPath) {

@@ -17,7 +17,9 @@ from PIL import Image as PillowImage
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-INPUT_PATH = PROJECT_ROOT / "output" / "sales-data.json"
+INPUT_PATH = Path(
+    os.environ.get("SALES_DATA_JSON_PATH") or PROJECT_ROOT / "output" / "sales-data.json"
+).expanduser().resolve()
 OUTPUT_PATH = PROJECT_ROOT / "output" / "sales-data.xlsx"
 IMAGE_DIR = PROJECT_ROOT / "output" / "excel-images"
 WPS_UPLOAD_IMAGE_MAX_SIZE = int(os.environ.get("WPS_UPLOAD_IMAGE_MAX_SIZE") or os.environ.get("WPS_UPLOAD_IMAGE_SIZE") or "140")

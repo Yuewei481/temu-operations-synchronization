@@ -1,0 +1,124 @@
+import { isAbsolute, resolve } from 'node:path';
+import { normalizeAccount, parseOutputMode, validateUniqueAccountSettings } from './sync_accounts_to_wps.js';
+
+const DEFAULT_LOGIN_URL = 'https://sso.geiwohuo.com/#/login/';
+
+export function readSheinAccountsFromEnv(env = process.env, configDir = process.cwd()) {
+  const count = parseCount(env.SHEIN_ACCOUNT_COUNT || '1');
+  const accounts = Array.from({ length: count }, (_, offset) => {
+    const index = offset + 1;
+    const prefix = `SHEIN_ACCOUNT_${index}_`;
+    const outputMode = parseOutputMode(env[`${prefix}OUTPUT_MODE`] || env.SHEIN_OUTPUT_MODE || env.OUTPUT_MODE);
+    const raw = {
+      name: env[`${prefix}NAME`] || `SHEIN ${index}`,
+      cdpPort: env[`${prefix}CDP_PORT`] || 9321 + index,
+      cdpOrigin: env[`${prefix}CDP_ORIGIN`],
+      chromeProfile: env[`${prefix}CHROME_PROFILE`],
+      sourceExcel: env[`${prefix}SOURCE_EXCEL`],
+      sourceExcelSkuCargoPrimaryColumn: env[`${prefix}SOURCE_EXCEL_SKU_CARGO_PRIMARY_COLUMN`],
+      sourceExcelSkuCargoSecondaryColumn: env[`${prefix}SOURCE_EXCEL_SKU_CARGO_SECONDARY_COLUMN`],
+      sourceExcelNameColumn: env[`${prefix}SOURCE_EXCEL_NAME_COLUMN`],
+      sourceExcelImageColumn: env[`${prefix}SOURCE_EXCEL_IMAGE_COLUMN`],
+      outputMode,
+      exportExcelPath: env[`${prefix}EXPORT_EXCEL_PATH`],
+      targetExcelPath: env[`${prefix}TARGET_EXCEL_PATH`],
+      targetExcelSheetName: env[`${prefix}TARGET_EXCEL_SHEET_NAME`],
+      targetExcelDateColumn: env[`${prefix}TARGET_EXCEL_DATE_COLUMN`],
+      targetExcelNameColumn: env[`${prefix}TARGET_EXCEL_NAME_COLUMN`],
+      targetExcelSalesColumn: env[`${prefix}TARGET_EXCEL_SALES_COLUMN`],
+      targetExcelStartRow: env[`${prefix}TARGET_EXCEL_START_ROW`],
+      wpsDocUrl: env[`${prefix}WPS_DOC_URL`],
+      wpsSheetName: env[`${prefix}WPS_SHEET_NAME`],
+      wpsDateColumn: env[`${prefix}WPS_DATE_COLUMN`],
+      wpsNameColumn: env[`${prefix}WPS_NAME_COLUMN`],
+      wpsSalesColumn: env[`${prefix}WPS_SALES_COLUMN`],
+      wpsStartRow: env[`${prefix}WPS_START_ROW`],
+      humanDelayMinSeconds: env[`${prefix}HUMAN_DELAY_MIN_SECONDS`] || env.SHEIN_HUMAN_DELAY_MIN_SECONDS,
+      humanDelayMaxSeconds: env[`${prefix}HUMAN_DELAY_MAX_SECONDS`] || env.SHEIN_HUMAN_DELAY_MAX_SECONDS,
+      manualLoginTimeoutMs: env[`${prefix}LOGIN_TIMEOUT_MS`] || env.SHEIN_LOGIN_TIMEOUT_MS || '1800000',
+      closeChromeAfterRun: env[`${prefix}CLOSE_CHROME_AFTER_RUN`] || env.SHEIN_CLOSE_CHROME_AFTER_RUN || '1',
+      chromePath: env[`${prefix}CHROME_PATH`] || env.CHROME_PATH,
+      trafficTargetDates: env[`${prefix}TARGET_DATES`] || env.SHEIN_TARGET_DATES,
+      pythonBin: env[`${prefix}PYTHON_BIN`] || env.PYTHON_BIN,
+    };
+
+    const normalized = normalizeAccount(raw, configDir, offset, {
+      ...env,
+      OUTPUT_MODE: String(outputMode),
+    });
+    const salesDataPath = resolveConfigPath(
+      env[`${prefix}SALES_DATA_JSON_PATH`] || `output/shein-account-${index}-sales-data.json`,
+      configDir,
+    );
+    const wpsPayloadPath = resolveConfigPath(
+      env[`${prefix}WPS_UPDATE_PAYLOAD`] || `output/shein-account-${index}-wps-payload.json`,
+      configDir,
+    );
+    normalized.env = {
+      ...normalized.env,
+      SELLER_LOGIN_URL: env[`${prefix}LOGIN_URL`] || env.SHEIN_LOGIN_URL || DEFAULT_LOGIN_URL,
+      SHEIN_HOME_URL: env.SHEIN_HOME_URL || 'https://sso.geiwohuo.com/#/home',
+      SHEIN_PRODUCT_DETAILS_URL:
+        env.SHEIN_PRODUCT_DETAILS_URL || 'https://sso.geiwohuo.com/#/sbn/merchandise/details',
+      SHEIN_LOGIN_TIMEOUT_MS:
+        env[`${prefix}LOGIN_TIMEOUT_MS`] || env.SHEIN_LOGIN_TIMEOUT_MS || '1800000',
+      SHEIN_TARGET_DATES: env[`${prefix}TARGET_DATES`] || env.SHEIN_TARGET_DATES || '',
+      SHEIN_TREND_RENDER_DELAY_MIN_SECONDS:
+        env[`${prefix}TREND_RENDER_DELAY_MIN_SECONDS`] ||
+        env.SHEIN_TREND_RENDER_DELAY_MIN_SECONDS ||
+        '5',
+      SHEIN_TREND_RENDER_DELAY_MAX_SECONDS:
+        env[`${prefix}TREND_RENDER_DELAY_MAX_SECONDS`] ||
+        env.SHEIN_TREND_RENDER_DELAY_MAX_SECONDS ||
+        '7',
+      SALES_DATA_JSON_PATH: salesDataPath,
+      WPS_UPDATE_PAYLOAD: wpsPayloadPath,
+      WPS_APPEND_PAYLOAD: wpsPayloadPath,
+    };
+    return {
+      ...normalized,
+      index,
+      salesDataPath,
+      wpsPayloadPath,
+    };
+  });
+
+  validateUniqueAccountSettings(accounts);
+  assertUnique(accounts, 'salesDataPath', 'sales data JSON path');
+  assertUnique(accounts, 'wpsPayloadPath', 'WPS payload path');
+  return accounts;
+}
+
+export function isSheinEnabled(env = process.env) {
+  return ['1', 'true', 'yes', 'on'].includes(String(env.SHEIN_ENABLED || '').trim().toLowerCase());
+}
+
+function parseCount(value) {
+  const count = Number.parseInt(String(value), 10);
+  if (!Number.isFinite(count) || count < 1) {
+    throw new Error('SHEIN_ACCOUNT_COUNT must be a positive integer.');
+  }
+  return count;
+}
+
+function resolveConfigPath(value, configDir) {
+  const text = String(value || '').trim();
+  if (!text) {
+    return '';
+  }
+  return isAbsolute(text) || /^[A-Za-z]:[\\/]/.test(text) ? text : resolve(configDir, text);
+}
+
+function assertUnique(accounts, key, label) {
+  const seen = new Map();
+  for (const account of accounts) {
+    const value = account[key];
+    if (!value) {
+      continue;
+    }
+    if (seen.has(value)) {
+      throw new Error(`${label} "${value}" is shared by "${seen.get(value)}" and "${account.name}".`);
+    }
+    seen.set(value, account.name);
+  }
+}

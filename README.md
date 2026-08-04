@@ -1,6 +1,6 @@
-# TEMU Operations Synchronization
+# TEMU and SHEIN Operations Synchronization
 
-Automates TEMU seller operations data collection, product-name matching, and sales export. Each account can independently export a new workbook, update an existing local workbook, or update explicitly configured columns in a WPS cloud spreadsheet.
+Automates TEMU seller operations data collection and an optional follow-up SHEIN sales collection stage. Each account can independently export a new workbook, update an existing local workbook, or update explicitly configured columns in a WPS cloud spreadsheet.
 
 ## 本脚本功能
 
@@ -23,6 +23,35 @@ Automates TEMU seller operations data collection, product-name matching, and sal
 - WPS 的日期列、商品名称列、销量列和起始行均由每个账号明确配置，不再依赖第一行的店铺分组标题。
 - 按 `日期 + 商品名` 匹配已有行并更新销量；找不到时在数据末尾追加日期、商品名和销量，不修改其他列。
 - 在点击、读取、翻页、打开详情等步骤中加入 2-5 秒随机等待，尽量模拟真人操作节奏。
+- 可在所有 TEMU 账号成功完成后，关闭 TEMU Chrome，并继续采集一个或多个 SHEIN 店铺。
+- SHEIN 使用本机普通 Chrome 和独立 CDP Profile，人工登录最多等待 30 分钟。
+- SHEIN 会读取全部商品页的供方货号，去掉字母和符号后只保留数字，并逐个打开“查看趋势”。
+- SHEIN 趋势弹窗只保留“销量”指标；多个目标日期会合并为连续日期段，每段最多 31 天，再读取各日期销量。
+- SHEIN 与 TEMU 可以共用同一个本地货号名称对照 Excel，并使用相同的“主列、备用列、名称列”匹配规则。
+- SHEIN 支持与 TEMU 相同的三种输出模式。模式 1 保留原有独立 Excel 格式；模式 2/3 最终只写日期、商品名和销量。
+
+## 运行依赖
+
+一台什么都没有的新电脑需要先安装以下软件：
+
+- **Git**：从 GitHub 下载项目和后续更新代码。
+- **Node.js 20 或更高版本**：运行 Chrome CDP 自动化、TEMU/SHEIN 采集和 WPS 写入脚本。Node.js 安装包会同时安装 `npm`。
+- **Python 3.10 或更高版本**：处理 Excel 对照表、本地 Excel 输出和图片。
+- **Google Chrome**：用户人工登录，脚本通过独立 Profile 和 CDP 控制这个普通 Chrome。
+
+项目依赖已经固定在仓库文件中：
+
+- `requirements.txt`：安装 `openpyxl` 和 `Pillow`。`openpyxl` 负责读写 `.xlsx`，`Pillow` 负责 Excel 图片处理。
+- `package.json` 和 `package-lock.json`：安装并锁定 Node.js 依赖。普通 Chrome CDP 主流程不需要额外执行 `npx playwright install`。
+
+从 GitHub 新下载后，必须在项目目录中创建独立 Python 虚拟环境，然后执行：
+
+```bash
+python -m pip install -r requirements.txt
+npm ci
+```
+
+`npm ci` 会按 `package-lock.json` 安装与当前版本一致的 Node.js 依赖；不要手动逐个安装 Python 包。下面的 Mac 和 Windows 步骤已经包含这些命令。
 
 ## 一、Mac 安装
 
@@ -59,7 +88,7 @@ python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
-npm install
+npm ci
 ```
 
 以后每次重新打开 Terminal 运行项目前，先执行：
@@ -118,7 +147,7 @@ python -m venv .venv
 source .venv/Scripts/activate
 python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
-npm install
+npm ci
 cp .env.example .env
 notepad .env
 ```
@@ -140,7 +169,7 @@ python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
-npm install
+npm ci
 Copy-Item .env.example .env
 notepad .env
 ```
@@ -249,6 +278,42 @@ ACCOUNT_2_WPS_DATE_COLUMN=A
 ACCOUNT_2_WPS_NAME_COLUMN=B
 ACCOUNT_2_WPS_SALES_COLUMN=C
 ACCOUNT_2_WPS_START_ROW=2
+
+# 默认关闭；设为 1 后，全部 TEMU 账号成功结束后继续运行 SHEIN。
+SHEIN_ENABLED=0
+SHEIN_ACCOUNT_COUNT=1
+SHEIN_OUTPUT_MODE=1
+SHEIN_TARGET_DATES=
+SHEIN_LOGIN_TIMEOUT_MS=1800000
+SHEIN_HUMAN_DELAY_MIN_SECONDS=2
+SHEIN_HUMAN_DELAY_MAX_SECONDS=5
+SHEIN_TREND_RENDER_DELAY_MIN_SECONDS=5
+SHEIN_TREND_RENDER_DELAY_MAX_SECONDS=7
+SHEIN_CLOSE_CHROME_AFTER_RUN=1
+
+SHEIN_ACCOUNT_1_NAME=SHEIN 1
+SHEIN_ACCOUNT_1_CDP_PORT=9322
+SHEIN_ACCOUNT_1_CHROME_PROFILE=C:/seller-central-profiles/shein1
+# 可以和 TEMU 使用同一个对照表。
+SHEIN_ACCOUNT_1_SOURCE_EXCEL=C:/seller-central-data/SKU SKC 品名.xlsx
+SHEIN_ACCOUNT_1_SOURCE_EXCEL_SKU_CARGO_PRIMARY_COLUMN=A
+SHEIN_ACCOUNT_1_SOURCE_EXCEL_SKU_CARGO_SECONDARY_COLUMN=B
+SHEIN_ACCOUNT_1_SOURCE_EXCEL_NAME_COLUMN=C
+SHEIN_ACCOUNT_1_OUTPUT_MODE=
+SHEIN_ACCOUNT_1_TARGET_DATES=
+SHEIN_ACCOUNT_1_EXPORT_EXCEL_PATH=C:/seller-central-output/shein1-sales.xlsx
+SHEIN_ACCOUNT_1_TARGET_EXCEL_PATH=
+SHEIN_ACCOUNT_1_TARGET_EXCEL_SHEET_NAME=运营数据记录表
+SHEIN_ACCOUNT_1_TARGET_EXCEL_DATE_COLUMN=A
+SHEIN_ACCOUNT_1_TARGET_EXCEL_NAME_COLUMN=B
+SHEIN_ACCOUNT_1_TARGET_EXCEL_SALES_COLUMN=C
+SHEIN_ACCOUNT_1_TARGET_EXCEL_START_ROW=2
+SHEIN_ACCOUNT_1_WPS_DOC_URL=
+SHEIN_ACCOUNT_1_WPS_SHEET_NAME=运营数据记录表
+SHEIN_ACCOUNT_1_WPS_DATE_COLUMN=A
+SHEIN_ACCOUNT_1_WPS_NAME_COLUMN=B
+SHEIN_ACCOUNT_1_WPS_SALES_COLUMN=C
+SHEIN_ACCOUNT_1_WPS_START_ROW=2
 ```
 
 常用字段说明：
@@ -275,6 +340,13 @@ ACCOUNT_2_WPS_START_ROW=2
 - `WPS_INITIAL_WAIT_MS`：开始检测 WPS 状态前的固定等待时间，建议保持 `0`。
 - `WPS_LOGIN_TIMEOUT_MS`：等待人工登录、工作表和编辑接口就绪的总时限；默认 `1800000`，即 30 分钟。页面提前就绪时会立即继续。
 - `CLOSE_CHROME_AFTER_RUN`：设为 `1` 时，成功完成后关闭当前账号的 CDP Chrome。
+- `SHEIN_ENABLED`：SHEIN 后续阶段的总开关。默认为 `0`，此时原有 TEMU 流程完全不变；设为 `1` 后才运行 SHEIN。
+- `SHEIN_ACCOUNT_COUNT`：需要顺序处理的 SHEIN 账号数量。增加账号时复制完整的 `SHEIN_ACCOUNT_2_*` 配置并修改编号。
+- `SHEIN_OUTPUT_MODE`：SHEIN 的默认输出模式，同样为 `1`、`2` 或 `3`；`SHEIN_ACCOUNT_*_OUTPUT_MODE` 非空时优先使用账号自己的模式。
+- `SHEIN_TARGET_DATES`：SHEIN 默认目标日期，多个日期使用逗号分隔；为空时读取昨天。账号自己的 `SHEIN_ACCOUNT_*_TARGET_DATES` 非空时优先。
+- `SHEIN_LOGIN_TIMEOUT_MS`：等待人工登录 SHEIN 的最长时间，默认 `1800000`，即 30 分钟。
+- `SHEIN_TREND_RENDER_DELAY_MIN_SECONDS` / `MAX_SECONDS`：修改日期后等待趋势图完成渲染的随机秒数，默认 5-7 秒。
+- `SHEIN_ACCOUNT_*_SOURCE_EXCEL`：SHEIN 的货号名称对照表，可以与任意 TEMU 账号指向同一个文件。
 
 同一个商品的多个日期会各占一行，例如：
 
@@ -323,6 +395,23 @@ npm run sync-wps:accounts
 4. 使用 `ACCOUNT_1_SOURCE_EXCEL`，依次查询货号主列和备用列，并读取名称列。
 5. 根据 `OUTPUT_MODE` 只执行以下一项：新建导出 Excel、更新已有本地 Excel，或更新 WPS 云 Excel。
 6. 再以完全独立的路径和目标配置处理 `ACCOUNT_2`。如果 `ACCOUNT_COUNT=3`，则继续以相同规则处理 `ACCOUNT_3`。
+
+当 `SHEIN_ENABLED=1` 时，所有 TEMU 账号成功完成后还会继续：
+
+1. 关闭脚本为各 TEMU 账号启动的 CDP Chrome。
+2. 打开或复用 `SHEIN_ACCOUNT_1_CHROME_PROFILE` 对应的普通 Chrome，并进入 SHEIN 登录页。
+3. 最多等待 30 分钟，由你手动登录；检测到 `#/home` 后进入商品明细页。
+4. 读取每一页、每一行商品的供方货号，相同货号视为同一个商品。
+5. 逐个打开“查看趋势”，验证弹窗属于当前货号，只勾选“销量”，并按连续日期段读取目标日期。
+6. 每个商品读取结束后关闭趋势弹窗；翻完全部页面后校验页面总商品数与实际访问行数。
+7. 使用与 TEMU 相同的对照 Excel 逻辑匹配名称，并按 SHEIN 账号自己的输出模式和目标位置执行输出。
+8. 成功后按配置关闭 SHEIN Chrome；失败时保留浏览器和现场，防止错误结果继续写入。
+
+只运行已配置的 SHEIN 账号，不先运行 TEMU：
+
+```bash
+npm run sync-shein
+```
 
 ### 只采集不写入
 
@@ -379,6 +468,11 @@ output/wps-append-payload.json
 - WPS 写入会持续检测登录、工作表和编辑接口；最多等待 `WPS_LOGIN_TIMEOUT_MS`，默认 30 分钟，提前就绪就立即继续。
 - 云 WPS 和本地 Excel 都会先按日期从早到晚分批：先写完最早日期的全部商品，再写下一个日期的全部商品；同一天的数据不会被拆开。
 - 如果担心操作太快，可以调大 `HUMAN_DELAY_MIN_SECONDS` 和 `HUMAN_DELAY_MAX_SECONDS`。
+- SHEIN 默认关闭。只有明确设置 `SHEIN_ENABLED=1` 时，TEMU 主流程完成后才会进入 SHEIN。
+- SHEIN 与 TEMU 共用对照 Excel 是允许的，但各账号的 CDP 端口、Chrome Profile 和输出目标仍必须互不冲突。
+- SHEIN 会把不连续日期分成多个日期段；连续日期尽量一次读取，每段最多 31 天。
+- SHEIN 只有在全部目标日期都成功得到销量后才保存该商品；缺失日期、弹窗货号不一致、分页遗漏或无法关闭弹窗都会终止流程，不会猜测数据。
+- SHEIN 页面结构首次发生变化时，脚本可能因找不到日期输入框、趋势图或分页控件而停止。此时浏览器会保留现场，应根据实际页面调整定位逻辑，而不是把缺失销量写成 0。
 
 ### Windows 常见报错
 
@@ -412,6 +506,7 @@ Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 - 修改 `.env.example` 或 README，让 Windows 用户更容易配置。
 - 根据新的 WPS 表格结构，调整每个账号的工作表、列位置和起始行配置。
 - 根据新的 TEMU 页面结构，调整销售数据或流量数据读取逻辑。
+- 根据新的 SHEIN 商品列表或趋势弹窗结构，调整供方货号、日期范围或图表读取逻辑。
 - 让 Codex 运行 `npm test` 验证基础逻辑。
 - 让 Codex 用已登录的本地 Chrome 跑一次端到端流程，检查采集和写入是否成功。
 

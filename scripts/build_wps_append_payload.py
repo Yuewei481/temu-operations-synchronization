@@ -2,6 +2,7 @@
 import base64
 import json
 import mimetypes
+import os
 import sys
 from pathlib import Path
 
@@ -11,7 +12,11 @@ from export_sales_excel import INPUT_PATH, IMAGE_DIR, merge_rows_by_sku_cargo, r
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-OUTPUT_PATH = PROJECT_ROOT / "output" / "wps-append-payload.json"
+OUTPUT_PATH = Path(
+    os.environ.get("WPS_UPDATE_PAYLOAD")
+    or os.environ.get("WPS_APPEND_PAYLOAD")
+    or PROJECT_ROOT / "output" / "wps-append-payload.json"
+).expanduser().resolve()
 
 
 def main():
