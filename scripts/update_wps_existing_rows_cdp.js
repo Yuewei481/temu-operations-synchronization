@@ -1,12 +1,13 @@
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { CdpPage, activateCdpPage, getCdpOrigin, listCdpPages } from './cdp_client.js';
+import { dateBatchKeys, orderRowsByDateBatch } from './date_batches.js';
 
 const DEFAULT_DOC_URL = '';
 const DEFAULT_SHEET_NAME = '运营数据记录表';
 const DEFAULT_PAYLOAD_PATH = 'output/wps-append-payload.json';
-const DEFAULT_INITIAL_WAIT_MS = 30 * 1000;
-const DEFAULT_OPENAPI_TIMEOUT_MS = 180 * 1000;
+const DEFAULT_INITIAL_WAIT_MS = 0;
+const DEFAULT_LOGIN_TIMEOUT_MS = 30 * 60 * 1000;
 const DEFAULT_SCAN_MAX_ROW = 5000;
 const POLL_INTERVAL_MS = 1000;
 
@@ -20,13 +21,14 @@ async function main() {
   const configuredLayout = buildConfiguredLayout();
   const payloadPath = resolve(process.env.WPS_UPDATE_PAYLOAD || process.env.WPS_APPEND_PAYLOAD || DEFAULT_PAYLOAD_PATH);
   const payload = JSON.parse(await readFile(payloadPath, 'utf8'));
-  const rows = payload.rows || [];
+  const rows = orderRowsByDateBatch(payload.rows || []);
 
   if (!rows.length) {
     throw new Error(`No rows to update in ${payloadPath}`);
   }
 
   console.log(`Rows to match/update: ${rows.length}`);
+  console.log(`Date batch order: ${dateBatchKeys(rows).join(', ')}`);
   const pageInfo = await findOrOpenWpsPage(cdpOrigin, docUrl);
   await activateCdpPage(pageInfo, cdpOrigin);
 
@@ -36,13 +38,17 @@ async function main() {
     await page.send('Page.enable');
 
     console.log(`WPS tab detected: ${pageInfo.url}`);
-    const initialWaitMs = Number.parseInt(process.env.WPS_INITIAL_WAIT_MS || `${DEFAULT_INITIAL_WAIT_MS}`, 10);
+    const loginDeadline = Date.now() + wpsLoginTimeoutMs();
+    const initialWaitMs = nonNegativeInteger(
+      process.env.WPS_INITIAL_WAIT_MS,
+      DEFAULT_INITIAL_WAIT_MS,
+      'WPS_INITIAL_WAIT_MS',
+    );
     if (initialWaitMs > 0) {
       console.log(`Waiting ${Math.round(initialWaitMs / 1000)} seconds for WPS login/document loading...`);
-      await sleep(initialWaitMs);
+      await sleep(Math.min(initialWaitMs, remainingTime(loginDeadline)));
     }
-    await waitForWpsSheetShell(page, sheetName, 120000);
-    await waitForWpsOpenApi(page, wpsOpenApiTimeoutMs());
+    await waitForWpsReady(page, sheetName, remainingTime(loginDeadline));
 
     console.log(`Activating sheet: ${sheetName}`);
     await activateWpsWorksheet(page, sheetName);
@@ -62,8 +68,28 @@ async function main() {
   }
 }
 
-function wpsOpenApiTimeoutMs() {
-  return Number.parseInt(process.env.WPS_OPENAPI_TIMEOUT_MS || `${DEFAULT_OPENAPI_TIMEOUT_MS}`, 10);
+function wpsLoginTimeoutMs() {
+  return positiveInteger(process.env.WPS_LOGIN_TIMEOUT_MS, DEFAULT_LOGIN_TIMEOUT_MS, 'WPS_LOGIN_TIMEOUT_MS');
+}
+
+function positiveInteger(value, fallback, label) {
+  const parsed = Number.parseInt(String(value ?? fallback), 10);
+  if (!Number.isFinite(parsed) || parsed < 1) {
+    throw new Error(`${label} must be a positive integer.`);
+  }
+  return parsed;
+}
+
+function nonNegativeInteger(value, fallback, label) {
+  const parsed = Number.parseInt(String(value ?? fallback), 10);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    throw new Error(`${label} must be zero or a positive integer.`);
+  }
+  return parsed;
+}
+
+function remainingTime(deadline) {
+  return Math.max(0, deadline - Date.now());
 }
 
 function buildConfiguredLayout() {
@@ -126,32 +152,28 @@ async function findOrOpenWpsPage(cdpOrigin, docUrl) {
   return response.json();
 }
 
-async function waitForWpsSheetShell(page, sheetName, timeoutMs) {
+async function waitForWpsReady(page, sheetName, timeoutMs) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    const ready = await page.evaluate(
-      `(document.body?.innerText || "").includes(${JSON.stringify(sheetName)}) && (document.body?.innerText || "").includes("开始")`,
+    const status = await page.evaluate(`(() => {
+      const bodyText = document.body?.innerText || '';
+      return {
+        sheetShell: bodyText.includes(${JSON.stringify(sheetName)}) && bodyText.includes('开始'),
+        openApi: !!window.WPSOpenApi?.Application,
+      };
+    })()`);
+    if (status.sheetShell && status.openApi) {
+      console.log('WPS login and document loading completed. Continuing immediately.');
+      return;
+    }
+    console.log(
+      `Waiting for WPS login/document loading (sheet=${status.sheetShell ? 'ready' : 'waiting'}, API=${status.openApi ? 'ready' : 'waiting'})...`,
     );
-    if (ready) {
-      return;
-    }
-    console.log('Waiting for WPS document to load. If needed, finish login in Chrome...');
     await sleep(POLL_INTERVAL_MS);
   }
-  throw new Error(`Timed out waiting for WPS sheet shell: ${sheetName}`);
-}
-
-async function waitForWpsOpenApi(page, timeoutMs) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    const ready = await page.evaluate('!!window.WPSOpenApi?.Application');
-    if (ready) {
-      return;
-    }
-    console.log('Waiting for WPS editing API to become available. If needed, finish WPS login in Chrome...');
-    await sleep(POLL_INTERVAL_MS);
-  }
-  throw new Error('Timed out waiting for WPSOpenApi.Application.');
+  throw new Error(
+    `Timed out after ${Math.round(timeoutMs / 60000)} minutes waiting for WPS login/document/API: ${sheetName}`,
+  );
 }
 
 async function clickPoint(page, expression) {
@@ -286,8 +308,13 @@ async function updateExistingRows(page, rows, { dryRun, layout }) {
         }
         await new Promise((resolve) => setTimeout(resolve, 50));
         for (const write of writes) {
-          const actual = normalizeCellValue(await cellText(app, write.address));
-          const expected = normalizeCellValue(write.value);
+          const normalizeWriteValue = write.field === 'date'
+            ? normalizeDate
+            : write.field === 'name'
+              ? normalizeName
+              : normalizeCellValue;
+          const actual = normalizeWriteValue(await cellText(app, write.address));
+          const expected = normalizeWriteValue(write.value);
           if (actual !== expected) {
             failedWrites.push({
               row: targetRow,

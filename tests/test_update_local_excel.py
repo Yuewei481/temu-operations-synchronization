@@ -64,6 +64,18 @@ class UpdateLocalExcelTest(unittest.TestCase):
             self.assertEqual(result_sheet["C3"].value, 8)
             result.close()
 
+    def test_appends_rows_in_date_batches(self):
+        rows = [
+            {"date": "2026/8/2", "name": "商品A", "sales": 1},
+            {"date": "2026/8/1", "name": "商品B", "sales": 2},
+            {"date": "2026-08-02", "name": "商品C", "sales": 3},
+            {"date": "2026年8月1日", "name": "商品D", "sales": 4},
+        ]
+
+        result = update_local_excel.unique_payload_rows(rows)
+
+        self.assertEqual([row["name"] for row in result], ["商品B", "商品D", "商品A", "商品C"])
+
 
 if __name__ == "__main__":
     unittest.main()

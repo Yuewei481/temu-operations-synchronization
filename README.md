@@ -272,7 +272,8 @@ ACCOUNT_2_WPS_START_ROW=2
 - `ACCOUNT_1_WPS_SHEET_NAME`：WPS 中要更新的工作表。
 - `ACCOUNT_1_WPS_DATE_COLUMN` / `NAME_COLUMN` / `SALES_COLUMN`：WPS 中的日期、商品名称、销量列。
 - `ACCOUNT_1_WPS_START_ROW`：WPS 中开始查找日期和名称的首行；找不到对应行时，从已用数据的末行下方追加。
-- `WPS_INITIAL_WAIT_MS`：打开 WPS 后预留给登录及文档加载的时间。
+- `WPS_INITIAL_WAIT_MS`：开始检测 WPS 状态前的固定等待时间，建议保持 `0`。
+- `WPS_LOGIN_TIMEOUT_MS`：等待人工登录、工作表和编辑接口就绪的总时限；默认 `1800000`，即 30 分钟。页面提前就绪时会立即继续。
 - `CLOSE_CHROME_AFTER_RUN`：设为 `1` 时，成功完成后关闭当前账号的 CDP Chrome。
 
 同一个商品的多个日期会各占一行，例如：
@@ -375,7 +376,8 @@ output/wps-append-payload.json
 - 如果 TEMU 店铺商品少于分页数量，页面不会显示分页按钮，这是正常情况，脚本会读取当前页。
 - 如果流量详情里最上面的日期不是目标日期，但曝光量和点击量为 0，脚本会按目标日期处理，适配 TEMU 对连续 0 数据不更新日期的显示规则。
 - 如果配置多个日期，同一个商品会生成多条日期记录；销量会优先读取销售趋势弹窗中对应日期的销量，没有销售趋势入口的商品会按 0 处理。
-- 如果 WPS 页面加载慢，可以调大 `WPS_INITIAL_WAIT_MS` 和 `WPS_OPENAPI_TIMEOUT_MS`。
+- WPS 写入会持续检测登录、工作表和编辑接口；最多等待 `WPS_LOGIN_TIMEOUT_MS`，默认 30 分钟，提前就绪就立即继续。
+- 云 WPS 和本地 Excel 都会先按日期从早到晚分批：先写完最早日期的全部商品，再写下一个日期的全部商品；同一天的数据不会被拆开。
 - 如果担心操作太快，可以调大 `HUMAN_DELAY_MIN_SECONDS` 和 `HUMAN_DELAY_MAX_SECONDS`。
 
 ### Windows 常见报错

@@ -97,7 +97,22 @@ def unique_payload_rows(rows):
         name = normalize_name(row.get("name"))
         if date and name:
             unique[(date, name)] = row
-    return list(unique.values())
+    return group_rows_by_date(list(unique.values()))
+
+
+def group_rows_by_date(rows):
+    groups = {}
+    for row in rows:
+        date = normalize_date(row.get("date"))
+        groups.setdefault(date, []).append(row)
+    return [row for date in sorted(groups, key=date_sort_key) for row in groups[date]]
+
+
+def date_sort_key(value):
+    match = re.fullmatch(r"(\d{4})/(\d{1,2})/(\d{1,2})", str(value or ""))
+    if not match:
+        return (1, str(value or ""))
+    return (0, int(match.group(1)), int(match.group(2)), int(match.group(3)))
 
 
 def index_existing_rows(sheet, start_row, date_column, name_column, sales_column):
