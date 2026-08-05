@@ -27,6 +27,15 @@ export function readSheinAccountsFromEnv(env = process.env, configDir = process.
       targetExcelNameColumn: env[`${prefix}TARGET_EXCEL_NAME_COLUMN`],
       targetExcelSalesColumn: env[`${prefix}TARGET_EXCEL_SALES_COLUMN`],
       targetExcelStartRow: env[`${prefix}TARGET_EXCEL_START_ROW`],
+      localDailyTotalEnabled:
+        env[`${prefix}LOCAL_DAILY_TOTAL_ENABLED`] ?? env.SHEIN_LOCAL_DAILY_TOTAL_ENABLED ?? '0',
+      localTotalExcelPath: env[`${prefix}LOCAL_TOTAL_EXCEL_PATH`],
+      localTotalSheetName: env[`${prefix}LOCAL_TOTAL_SHEET_NAME`],
+      localTotalDateColumn: env[`${prefix}LOCAL_TOTAL_DATE_COLUMN`],
+      localTotalSalesColumn: env[`${prefix}LOCAL_TOTAL_SALES_COLUMN`],
+      localTotalStartRow: env[`${prefix}LOCAL_TOTAL_START_ROW`],
+      localDailyTotalPayload:
+        env[`${prefix}LOCAL_DAILY_TOTAL_PAYLOAD`] || `output/shein-account-${index}-daily-totals.json`,
       wpsDocUrl: env[`${prefix}WPS_DOC_URL`],
       wpsSheetName: env[`${prefix}WPS_SHEET_NAME`],
       wpsDateColumn: env[`${prefix}WPS_DATE_COLUMN`],
@@ -89,7 +98,8 @@ export function readSheinAccountsFromEnv(env = process.env, configDir = process.
       index,
       salesDataPath,
       wpsPayloadPath,
-      dailyTotalsPayloadPath: normalized.wpsDailyTotalPayloadPath,
+      dailyTotalsPayloadPath:
+        normalized.localDailyTotalPayloadPath || normalized.wpsDailyTotalPayloadPath,
     };
   });
 

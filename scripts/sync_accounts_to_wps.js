@@ -14,6 +14,13 @@ const ACCOUNT_TARGET_ENV_KEYS = [
   'LOCAL_TARGET_NAME_COLUMN',
   'LOCAL_TARGET_SALES_COLUMN',
   'LOCAL_TARGET_START_ROW',
+  'LOCAL_DAILY_TOTAL_ENABLED',
+  'LOCAL_TOTAL_EXCEL_PATH',
+  'LOCAL_TOTAL_SHEET_NAME',
+  'LOCAL_TOTAL_DATE_COLUMN',
+  'LOCAL_TOTAL_SALES_COLUMN',
+  'LOCAL_TOTAL_START_ROW',
+  'LOCAL_DAILY_TOTAL_PAYLOAD',
   'WPS_DOC_URL',
   'WPS_SHEET_NAME',
   'WPS_DATE_COLUMN',
@@ -136,6 +143,14 @@ export function readAccountsFromEnv(env) {
     targetExcelNameColumn: env[`ACCOUNT_${index}_TARGET_EXCEL_NAME_COLUMN`],
     targetExcelSalesColumn: env[`ACCOUNT_${index}_TARGET_EXCEL_SALES_COLUMN`],
     targetExcelStartRow: env[`ACCOUNT_${index}_TARGET_EXCEL_START_ROW`],
+    localDailyTotalEnabled:
+      env[`ACCOUNT_${index}_LOCAL_DAILY_TOTAL_ENABLED`] ?? env.LOCAL_DAILY_TOTAL_ENABLED ?? '0',
+    localTotalExcelPath: env[`ACCOUNT_${index}_LOCAL_TOTAL_EXCEL_PATH`],
+    localTotalSheetName: env[`ACCOUNT_${index}_LOCAL_TOTAL_SHEET_NAME`],
+    localTotalDateColumn: env[`ACCOUNT_${index}_LOCAL_TOTAL_DATE_COLUMN`],
+    localTotalSalesColumn: env[`ACCOUNT_${index}_LOCAL_TOTAL_SALES_COLUMN`],
+    localTotalStartRow: env[`ACCOUNT_${index}_LOCAL_TOTAL_START_ROW`],
+    localDailyTotalPayload: env[`ACCOUNT_${index}_LOCAL_DAILY_TOTAL_PAYLOAD`],
     wpsDocUrl: env[`ACCOUNT_${index}_WPS_DOC_URL`],
     wpsSheetName: env[`ACCOUNT_${index}_WPS_SHEET_NAME`],
     wpsDateColumn: env[`ACCOUNT_${index}_WPS_DATE_COLUMN`],
@@ -220,6 +235,18 @@ export function normalizeAccount(rawAccount, configDir, index, baseEnv = process
   const targetExcelPath = outputMode === 2
     ? resolveConfigPath(rawAccount.targetExcelPath, configDir)
     : '';
+  const localDailyTotalEnabled = outputMode === 2 && booleanFlag(
+    rawAccount.localDailyTotalEnabled ?? baseEnv.LOCAL_DAILY_TOTAL_ENABLED ?? '0',
+  );
+  const localTotalExcelPath = localDailyTotalEnabled
+    ? resolveConfigPath(rawAccount.localTotalExcelPath || rawAccount.targetExcelPath, configDir)
+    : '';
+  const localDailyTotalPayloadPath = localDailyTotalEnabled
+    ? resolveConfigPath(
+      rawAccount.localDailyTotalPayload || `output/temu-account-${index + 1}-daily-totals.json`,
+      configDir,
+    )
+    : '';
   const wpsDailyTotalEnabled = outputMode === 3 && booleanFlag(
     rawAccount.wpsDailyTotalEnabled ?? baseEnv.WPS_DAILY_TOTAL_ENABLED ?? '1',
   );
@@ -242,6 +269,8 @@ export function normalizeAccount(rawAccount, configDir, index, baseEnv = process
     outputMode,
     exportExcelPath,
     targetExcelPath,
+    localDailyTotalEnabled,
+    localTotalExcelPath,
     wpsDailyTotalEnabled,
   });
 
@@ -272,6 +301,17 @@ export function normalizeAccount(rawAccount, configDir, index, baseEnv = process
       LOCAL_TARGET_NAME_COLUMN: rawAccount.targetExcelNameColumn,
       LOCAL_TARGET_SALES_COLUMN: rawAccount.targetExcelSalesColumn,
       LOCAL_TARGET_START_ROW: rawAccount.targetExcelStartRow,
+      ...(localDailyTotalEnabled ? {
+        LOCAL_DAILY_TOTAL_ENABLED: '1',
+        LOCAL_TOTAL_EXCEL_PATH: localTotalExcelPath,
+        LOCAL_TOTAL_SHEET_NAME: rawAccount.localTotalSheetName,
+        LOCAL_TOTAL_DATE_COLUMN: rawAccount.localTotalDateColumn,
+        LOCAL_TOTAL_SALES_COLUMN: rawAccount.localTotalSalesColumn,
+        LOCAL_TOTAL_START_ROW: rawAccount.localTotalStartRow,
+        LOCAL_DAILY_TOTAL_PAYLOAD: localDailyTotalPayloadPath,
+      } : {
+        LOCAL_DAILY_TOTAL_ENABLED: '0',
+      }),
     } : {}),
     ...(outputMode === 3 ? {
       WPS_DOC_URL: rawAccount.wpsDocUrl,
@@ -327,6 +367,17 @@ export function normalizeAccount(rawAccount, configDir, index, baseEnv = process
     outputMode,
     exportExcelPath,
     targetExcelPath,
+    localDailyTotalEnabled,
+    localTotalExcelPath,
+    localDailyTotalPayloadPath,
+    localTotalTargetKey: localDailyTotalEnabled
+      ? [
+        localTotalExcelPath,
+        rawAccount.localTotalSheetName,
+        String(rawAccount.localTotalDateColumn || '').toUpperCase(),
+        String(rawAccount.localTotalSalesColumn || '').toUpperCase(),
+      ].join('|')
+      : '',
     wpsDailyTotalEnabled,
     wpsDailyTotalPayloadPath,
     wpsTotalTargetKey: wpsDailyTotalEnabled
@@ -346,6 +397,16 @@ export function validateUniqueAccountSettings(accounts) {
   assertUnique(accounts, 'chromeProfile', 'Chrome profile');
   assertUniqueNonEmpty(accounts.filter((account) => account.outputMode === 1), 'exportExcelPath', 'export Excel path');
   assertUniqueNonEmpty(accounts.filter((account) => account.outputMode === 2), 'targetExcelPath', 'target Excel path');
+  assertUniqueNonEmpty(
+    accounts.filter((account) => account.localDailyTotalEnabled),
+    'localDailyTotalPayloadPath',
+    'local daily-total payload path',
+  );
+  assertUniqueNonEmpty(
+    accounts.filter((account) => account.localDailyTotalEnabled),
+    'localTotalTargetKey',
+    'local daily-total target',
+  );
   assertUniqueNonEmpty(
     accounts.filter((account) => account.wpsDailyTotalEnabled),
     'wpsDailyTotalPayloadPath',
@@ -367,7 +428,15 @@ export function parseOutputMode(value) {
 }
 
 function validateModeSpecificAccount(rawAccount, account) {
-  const { name, outputMode, exportExcelPath, targetExcelPath, wpsDailyTotalEnabled } = account;
+  const {
+    name,
+    outputMode,
+    exportExcelPath,
+    targetExcelPath,
+    localDailyTotalEnabled,
+    localTotalExcelPath,
+    wpsDailyTotalEnabled,
+  } = account;
   if (outputMode === 1) {
     requireSetting(exportExcelPath, name, 'exportExcelPath (ACCOUNT_n_EXPORT_EXCEL_PATH)');
     return;
@@ -380,6 +449,17 @@ function validateModeSpecificAccount(rawAccount, account) {
     requireSetting(rawAccount.targetExcelNameColumn, name, 'targetExcelNameColumn');
     requireSetting(rawAccount.targetExcelSalesColumn, name, 'targetExcelSalesColumn');
     requirePositiveInteger(rawAccount.targetExcelStartRow, name, 'targetExcelStartRow');
+    if (localDailyTotalEnabled) {
+      requireSetting(localTotalExcelPath, name, 'localTotalExcelPath');
+      requireSetting(rawAccount.localTotalSheetName, name, 'localTotalSheetName');
+      requireSetting(rawAccount.localTotalDateColumn, name, 'localTotalDateColumn');
+      requireSetting(rawAccount.localTotalSalesColumn, name, 'localTotalSalesColumn');
+      requirePositiveInteger(rawAccount.localTotalStartRow, name, 'localTotalStartRow');
+      if (String(rawAccount.localTotalDateColumn).trim().toUpperCase() ===
+          String(rawAccount.localTotalSalesColumn).trim().toUpperCase()) {
+        throw new Error(`Account "${name}" must use different local total date and sales columns.`);
+      }
+    }
     return;
   }
 

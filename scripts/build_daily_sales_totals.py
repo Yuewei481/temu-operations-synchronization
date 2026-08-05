@@ -15,7 +15,8 @@ INPUT_PATH = Path(
     or PROJECT_ROOT / "output" / "wps-append-payload.json"
 ).expanduser().resolve()
 OUTPUT_PATH = Path(
-    os.environ.get("WPS_DAILY_TOTAL_PAYLOAD")
+    os.environ.get("LOCAL_DAILY_TOTAL_PAYLOAD")
+    or os.environ.get("WPS_DAILY_TOTAL_PAYLOAD")
     or PROJECT_ROOT / "output" / "wps-daily-sales-totals.json"
 ).expanduser().resolve()
 
@@ -32,7 +33,7 @@ def main():
         json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
     )
-    print(f"Saved WPS daily sales totals: {OUTPUT_PATH}")
+    print(f"Saved daily sales totals: {OUTPUT_PATH}")
     print(f"Dates: {len(rows)}")
     print(f"Products: {diagnostics['products']}")
 

@@ -65,6 +65,36 @@ test('OUTPUT_MODE=2 only maps the existing local Excel target', () => {
   assert.equal(account.env.WPS_DOC_URL, undefined);
 });
 
+test('OUTPUT_MODE=2 maps optional local daily-total settings', () => {
+  const account = normalizeAccount(
+    {
+      ...commonAccount,
+      targetExcelPath: 'targets/details.xlsx',
+      targetExcelSheetName: '运营数据记录表',
+      targetExcelDateColumn: 'A',
+      targetExcelNameColumn: 'B',
+      targetExcelSalesColumn: 'C',
+      targetExcelStartRow: '4',
+      localDailyTotalEnabled: '1',
+      localTotalSheetName: '总销量表',
+      localTotalDateColumn: 'G',
+      localTotalSalesColumn: 'H',
+      localTotalStartRow: '3',
+    },
+    '/project',
+    0,
+    { OUTPUT_MODE: '2' },
+  );
+
+  assert.equal(account.localDailyTotalEnabled, true);
+  assert.equal(account.env.LOCAL_TOTAL_EXCEL_PATH, resolve('/project', 'targets/details.xlsx'));
+  assert.equal(account.env.LOCAL_TOTAL_SHEET_NAME, '总销量表');
+  assert.equal(account.env.LOCAL_TOTAL_DATE_COLUMN, 'G');
+  assert.equal(account.env.LOCAL_TOTAL_SALES_COLUMN, 'H');
+  assert.equal(account.env.LOCAL_TOTAL_START_ROW, '3');
+  assert.equal(account.env.LOCAL_DAILY_TOTAL_PAYLOAD, resolve('/project', 'output/temu-account-1-daily-totals.json'));
+});
+
 test('OUTPUT_MODE=3 maps explicit WPS columns without a group title', () => {
   const account = normalizeAccount(
     {

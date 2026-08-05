@@ -37,7 +37,7 @@ export async function syncOneSheinAccount(account) {
     await ensureChromeCdpAndSheinTab(env);
     await rm(account.salesDataPath, { force: true });
     await rm(account.wpsPayloadPath, { force: true });
-    if (account.wpsDailyTotalEnabled) {
+    if (account.wpsDailyTotalEnabled || account.localDailyTotalEnabled) {
       await rm(account.dailyTotalsPayloadPath, { force: true });
     }
     if (outputMode === 1) {
@@ -65,6 +65,26 @@ export async function syncOneSheinAccount(account) {
 
     if (outputMode === 2) {
       await runStep('Update SHEIN local target Excel', pythonBin, ['scripts/update_local_excel.py'], env);
+      if (account.localDailyTotalEnabled) {
+        const totalsStartedAt = Date.now();
+        await runStep(
+          'Build SHEIN local daily totals from matched products',
+          pythonBin,
+          ['scripts/build_daily_sales_totals.py'],
+          env,
+        );
+        await assertFreshFile(
+          account.dailyTotalsPayloadPath,
+          totalsStartedAt,
+          'SHEIN local daily sales total payload',
+        );
+        await runStep(
+          'Update SHEIN local Excel daily sales totals',
+          pythonBin,
+          ['scripts/update_local_daily_totals.py'],
+          env,
+        );
+      }
       succeeded = true;
       console.log('SHEIN collection and local Excel update finished.');
       return;

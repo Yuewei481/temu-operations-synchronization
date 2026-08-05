@@ -75,6 +75,30 @@ test('multiple SHEIN accounts may share one lookup workbook', () => {
   assert.equal(accounts[1].sourceExcel, resolve('/workspace', 'data/lookup.xlsx'));
 });
 
+test('SHEIN local Excel mode maps its own daily-total destination', () => {
+  const env = baseEnv();
+  env.SHEIN_OUTPUT_MODE = '2';
+  delete env.SHEIN_ACCOUNT_1_EXPORT_EXCEL_PATH;
+  env.SHEIN_ACCOUNT_1_TARGET_EXCEL_PATH = 'output/shein-details.xlsx';
+  env.SHEIN_ACCOUNT_1_TARGET_EXCEL_SHEET_NAME = '运营数据记录表';
+  env.SHEIN_ACCOUNT_1_TARGET_EXCEL_DATE_COLUMN = 'I';
+  env.SHEIN_ACCOUNT_1_TARGET_EXCEL_NAME_COLUMN = 'J';
+  env.SHEIN_ACCOUNT_1_TARGET_EXCEL_SALES_COLUMN = 'K';
+  env.SHEIN_ACCOUNT_1_TARGET_EXCEL_START_ROW = '4';
+  env.SHEIN_ACCOUNT_1_LOCAL_DAILY_TOTAL_ENABLED = '1';
+  env.SHEIN_ACCOUNT_1_LOCAL_TOTAL_SHEET_NAME = '总销量表';
+  env.SHEIN_ACCOUNT_1_LOCAL_TOTAL_DATE_COLUMN = 'G';
+  env.SHEIN_ACCOUNT_1_LOCAL_TOTAL_SALES_COLUMN = 'H';
+  env.SHEIN_ACCOUNT_1_LOCAL_TOTAL_START_ROW = '3';
+
+  const [account] = readSheinAccountsFromEnv(env, '/workspace');
+  assert.equal(account.localDailyTotalEnabled, true);
+  assert.equal(account.env.LOCAL_TOTAL_EXCEL_PATH, resolve('/workspace', 'output/shein-details.xlsx'));
+  assert.equal(account.env.LOCAL_TOTAL_DATE_COLUMN, 'G');
+  assert.equal(account.env.LOCAL_TOTAL_SALES_COLUMN, 'H');
+  assert.equal(account.dailyTotalsPayloadPath, resolve('/workspace', 'output/shein-account-1-daily-totals.json'));
+});
+
 test('multiple SHEIN cloud accounts keep independent daily-total columns', () => {
   const env = {
     ...baseEnv(),

@@ -60,6 +60,24 @@ export async function syncOneAccount(options = {}) {
     );
     if (outputMode === 2) {
       await runStep('Update local target Excel', pythonBin, ['scripts/update_local_excel.py'], env);
+      if (truthy(env.LOCAL_DAILY_TOTAL_ENABLED)) {
+        const dailyTotalPayloadPath = resolve(env.LOCAL_DAILY_TOTAL_PAYLOAD);
+        await rm(dailyTotalPayloadPath, { force: true });
+        const totalsStartedAt = Date.now();
+        await runStep(
+          'Build local daily totals from matched products',
+          pythonBin,
+          ['scripts/build_daily_sales_totals.py'],
+          env,
+        );
+        await assertFreshFile(dailyTotalPayloadPath, totalsStartedAt, 'Local daily sales total payload');
+        await runStep(
+          'Update local Excel daily sales totals',
+          pythonBin,
+          ['scripts/update_local_daily_totals.py'],
+          env,
+        );
+      }
       succeeded = true;
       console.log('Collection and local Excel update finished.');
       return;
@@ -128,6 +146,22 @@ function validateOutputModeEnv(env, mode) {
       'LOCAL_TARGET_START_ROW',
     ]) {
       requireEnv(env, key);
+    }
+    if (truthy(env.LOCAL_DAILY_TOTAL_ENABLED)) {
+      for (const key of [
+        'LOCAL_DAILY_TOTAL_PAYLOAD',
+        'LOCAL_TOTAL_EXCEL_PATH',
+        'LOCAL_TOTAL_SHEET_NAME',
+        'LOCAL_TOTAL_DATE_COLUMN',
+        'LOCAL_TOTAL_SALES_COLUMN',
+        'LOCAL_TOTAL_START_ROW',
+      ]) {
+        requireEnv(env, key);
+      }
+      if (String(env.LOCAL_TOTAL_DATE_COLUMN).trim().toUpperCase() ===
+          String(env.LOCAL_TOTAL_SALES_COLUMN).trim().toUpperCase()) {
+        throw new Error('LOCAL_TOTAL_DATE_COLUMN and LOCAL_TOTAL_SALES_COLUMN must be different.');
+      }
     }
     return;
   }
