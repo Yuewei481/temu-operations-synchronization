@@ -6,6 +6,7 @@
   "scripts": {
     "start": "node scripts/sync_accounts_to_wps.js",
     "test": "node --test",
+    "login": "node scripts/login_seller_central.js",
     "open-login": "node scripts/open_login_in_chrome.js",
     "start-chrome:cdp": "node scripts/start_chrome_cdp.js",
     "check-seller-home": "node scripts/check_seller_home_in_chrome.js",

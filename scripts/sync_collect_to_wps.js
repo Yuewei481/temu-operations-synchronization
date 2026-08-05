@@ -224,8 +224,20 @@ async function ensureChromeCdpAndSellerTab(env = process.env) {
     console.log('The original Chrome login tab is still loading; the collector will keep waiting on that tab.');
   }
 
+  const credentialKeys = ['SELLER_PHONE_COUNTRY_CODE', 'SELLER_PHONE', 'SELLER_PASSWORD'];
+  const configuredCredentialKeys = credentialKeys.filter((key) => String(env[key] || '').trim());
+  if (configuredCredentialKeys.length > 0 && configuredCredentialKeys.length < credentialKeys.length) {
+    const missingKeys = credentialKeys.filter((key) => !String(env[key] || '').trim());
+    throw new Error(`Incomplete local TEMU login configuration: ${missingKeys.join(', ')}`);
+  }
+  if (configuredCredentialKeys.length === credentialKeys.length) {
+    await runStep('Automatic TEMU login', process.execPath, ['scripts/auto_login_seller_cdp.js'], env);
+  }
+
   console.log(
-    startedByScript
+    configuredCredentialKeys.length === credentialKeys.length
+      ? 'Automatic TEMU login completed or the account was already signed in.'
+      : startedByScript
       ? 'Chrome was opened by this workflow. Please finish manual login in that Chrome window.'
       : 'Chrome CDP is already running. Seller Central login/home tab is ready or has been opened.',
   );
