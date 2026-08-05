@@ -5,18 +5,38 @@
       "cdpPort": 9222,
       "chromeProfile": "C:\\seller-central-profiles\\temu1",
       "sourceExcel": "C:\\seller-central-data\\temu1.xlsx",
-      "groupTitle": "TEMU 1",
+      "outputMode": 3,
       "wpsDocUrl": "https://www.kdocs.cn/l/your-wps-document-id",
-      "wpsSheetName": "运营数据记录表"
+      "wpsSheetName": "运营数据记录表",
+      "wpsDateColumn": "A",
+      "wpsNameColumn": "B",
+      "wpsSalesColumn": "C",
+      "wpsStartRow": 2,
+      "wpsDailyTotalEnabled": true,
+      "wpsTotalDocUrl": "https://www.kdocs.cn/l/your-total-wps-document-id",
+      "wpsTotalSheetName": "总销量表",
+      "wpsTotalDateColumn": "A",
+      "wpsTotalSalesColumn": "B",
+      "wpsTotalStartRow": 3
     },
     {
       "name": "TEMU 2",
       "cdpPort": 9223,
       "chromeProfile": "C:\\seller-central-profiles\\temu2",
       "sourceExcel": "C:\\seller-central-data\\temu2.xlsx",
-      "groupTitle": "TEMU 2",
+      "outputMode": 3,
       "wpsDocUrl": "https://www.kdocs.cn/l/your-wps-document-id",
-      "wpsSheetName": "运营数据记录表"
+      "wpsSheetName": "运营数据记录表",
+      "wpsDateColumn": "D",
+      "wpsNameColumn": "E",
+      "wpsSalesColumn": "F",
+      "wpsStartRow": 2,
+      "wpsDailyTotalEnabled": true,
+      "wpsTotalDocUrl": "https://www.kdocs.cn/l/your-total-wps-document-id",
+      "wpsTotalSheetName": "总销量表",
+      "wpsTotalDateColumn": "D",
+      "wpsTotalSalesColumn": "E",
+      "wpsTotalStartRow": 3
     }
   ]
 }

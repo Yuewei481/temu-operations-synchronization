@@ -2,6 +2,12 @@ import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { CdpPage, activateCdpPage, getCdpOrigin, listCdpPages } from './cdp_client.js';
 import { dateBatchKeys, orderRowsByDateBatch } from './date_batches.js';
+import {
+  WPS_SIGN_IN_LABELS,
+  isMatchingWpsDocumentPage,
+  isRecoverableWpsNavigationError,
+  isWpsLoginPage,
+} from './wps_auth_state.js';
 
 const DEFAULT_DOC_URL = '';
 const DEFAULT_SHEET_NAME = '运营数据记录表';
@@ -12,6 +18,20 @@ const DEFAULT_SCAN_MAX_ROW = 5000;
 const POLL_INTERVAL_MS = 1000;
 
 async function main() {
+  const retryDeadline = Date.now() + wpsLoginTimeoutMs();
+  while (Date.now() < retryDeadline) {
+    try {
+      return await updateExistingRowsAttempt(retryDeadline);
+    } catch (error) {
+      if (!isRecoverableWpsNavigationError(error) || remainingTime(retryDeadline) <= 0) throw error;
+      console.log('WPS login/navigation replaced the page. Reconnecting and continuing to wait...');
+      await sleep(POLL_INTERVAL_MS);
+    }
+  }
+  throw new Error('Timed out waiting for a stable signed-in WPS document.');
+}
+
+async function updateExistingRowsAttempt(loginDeadline) {
   const cdpOrigin = getCdpOrigin();
   const docUrl = process.env.WPS_DOC_URL || DEFAULT_DOC_URL;
   if (!docUrl) {
@@ -29,7 +49,8 @@ async function main() {
 
   console.log(`Rows to match/update: ${rows.length}`);
   console.log(`Date batch order: ${dateBatchKeys(rows).join(', ')}`);
-  const pageInfo = await findOrOpenWpsPage(cdpOrigin, docUrl);
+  await findOrOpenWpsPage(cdpOrigin, docUrl);
+  const pageInfo = await waitForStableWpsPage(cdpOrigin, docUrl, loginDeadline);
   await activateCdpPage(pageInfo, cdpOrigin);
 
   const page = new CdpPage(pageInfo);
@@ -38,7 +59,6 @@ async function main() {
     await page.send('Page.enable');
 
     console.log(`WPS tab detected: ${pageInfo.url}`);
-    const loginDeadline = Date.now() + wpsLoginTimeoutMs();
     const initialWaitMs = nonNegativeInteger(
       process.env.WPS_INITIAL_WAIT_MS,
       DEFAULT_INITIAL_WAIT_MS,
@@ -62,6 +82,15 @@ async function main() {
 
     const result = await updateExistingRows(page, rows, { dryRun: false, layout });
     printUpdateResult(result);
+    if (result.failedWrites.length) {
+      await sleep(POLL_INTERVAL_MS);
+      const currentPages = await listCdpPages(cdpOrigin);
+      const loginPage = currentPages.find(isWpsLoginPage);
+      if (loginPage) {
+        throw new Error('WPS login required after attempted write. Reconnect after authentication.');
+      }
+      throw new Error(`${result.failedWrites.length} WPS detail cell write(s) failed verification.`);
+    }
     console.log('Done. Rows were matched or appended using the configured date, name, and sales columns.');
   } finally {
     await page.close();
@@ -133,8 +162,12 @@ function excelColumnToIndex(value, label) {
 }
 
 async function findOrOpenWpsPage(cdpOrigin, docUrl) {
-  const docId = docUrl.match(/\/l\/([^/?#]+)/)?.[1] || '';
+  const docId = '__strict_path_matching_only__';
   const pages = await listCdpPages(cdpOrigin);
+  const matchingPage = pages.find((page) => isMatchingWpsDocumentPage(page, docUrl));
+  if (matchingPage) return matchingPage;
+  const loginPage = pages.find(isWpsLoginPage);
+  if (loginPage) return loginPage;
   const existing = pages.find(
     (page) =>
       page.type === 'page' &&
@@ -152,7 +185,89 @@ async function findOrOpenWpsPage(cdpOrigin, docUrl) {
   return response.json();
 }
 
+async function waitForStableWpsPage(cdpOrigin, docUrl, deadline, stableMs = 5000) {
+  let stableTargetId = '';
+  let stableSince = 0;
+  while (Date.now() < deadline) {
+    const pages = await listCdpPages(cdpOrigin);
+    const page = pages.find((candidate) => isMatchingWpsDocumentPage(candidate, docUrl));
+    if (!page) {
+      stableTargetId = '';
+      stableSince = 0;
+      console.log('Waiting for WPS login to return to the target document...');
+      await sleep(POLL_INTERVAL_MS);
+      continue;
+    }
+    if (page.id !== stableTargetId) {
+      stableTargetId = page.id;
+      stableSince = Date.now();
+    }
+    if (Date.now() - stableSince >= stableMs) {
+      console.log('WPS target document remained stable after login.');
+      return page;
+    }
+    console.log('Confirming that the WPS target document is stable...');
+    await sleep(POLL_INTERVAL_MS);
+  }
+  throw new Error('Timed out waiting for WPS login to return to the target document.');
+}
+
+function isMatchingWpsPage(page, docUrl) {
+  const docId = docUrl.match(/\/l\/([^/?#]+)/)?.[1] || '';
+  if (page.type !== 'page') return false;
+  try {
+    const candidate = new URL(page.url);
+    const target = new URL(docUrl);
+    return candidate.hostname === target.hostname &&
+      (docId ? candidate.pathname.includes(`/l/${docId}`) : candidate.href === target.href);
+  } catch {
+    return false;
+  }
+}
+
 async function waitForWpsReady(page, sheetName, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const status = await page.evaluate(browserFunction(async (targetSheetName, signInLabels) => {
+      const visible = (element) => {
+        const rect = element?.getBoundingClientRect();
+        const style = element ? getComputedStyle(element) : null;
+        return Boolean(rect && rect.width > 0 && rect.height > 0 &&
+          style?.display !== 'none' && style?.visibility !== 'hidden');
+      };
+      const normalize = (value) => String(value || '').replace(/\s+/g, ' ').trim().toLowerCase();
+      const controls = [...document.querySelectorAll('button, a, [role="button"]')]
+        .filter(visible)
+        .map((element) => normalize(element.innerText || element.textContent || element.ariaLabel));
+      const signInPrompt = controls.some((text) => signInLabels.some((label) =>
+        text === label || text.startsWith(`${label} `) || text.endsWith(` ${label}`)
+      ));
+      const app = window.WPSOpenApi?.Application;
+      if (!app) return { openApi: false, sheetReady: false, signedIn: !signInPrompt };
+      await window.WPSOpenApi.documentReadyPromise?.catch?.(() => {});
+      try {
+        const sheet = app.Worksheets(targetSheetName);
+        const actualName = String(await Promise.resolve(sheet?.Name).catch(() => '') || '');
+        return { openApi: true, sheetReady: actualName === targetSheetName, signedIn: !signInPrompt };
+      } catch {
+        return { openApi: true, sheetReady: false, signedIn: !signInPrompt };
+      }
+    }, sheetName, WPS_SIGN_IN_LABELS));
+    if (status.sheetReady && status.openApi && status.signedIn) {
+      console.log('WPS login and document loading completed. Continuing immediately.');
+      return;
+    }
+    console.log(
+      `Waiting for WPS login/document loading ` +
+      `(sheet=${status.sheetReady ? 'ready' : 'waiting'}, API=${status.openApi ? 'ready' : 'waiting'}, ` +
+      `login=${status.signedIn ? 'ready' : 'waiting'})...`,
+    );
+    await sleep(POLL_INTERVAL_MS);
+  }
+  throw new Error(`Timed out waiting for a signed-in WPS sheet: ${sheetName}`);
+}
+
+async function waitForWpsReadyLegacy(page, sheetName, timeoutMs) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     const status = await page.evaluate(`(() => {
@@ -160,9 +275,11 @@ async function waitForWpsReady(page, sheetName, timeoutMs) {
       return {
         sheetShell: bodyText.includes(${JSON.stringify(sheetName)}) && bodyText.includes('开始'),
         openApi: !!window.WPSOpenApi?.Application,
+        signedIn: !bodyText.includes('Sign In Now') &&
+          !bodyText.split(/\s+/).some((text) => text === '\u767b\u5f55'),
       };
     })()`);
-    if (status.sheetShell && status.openApi) {
+    if (status.sheetShell && status.openApi && status.signedIn) {
       console.log('WPS login and document loading completed. Continuing immediately.');
       return;
     }
@@ -245,41 +362,26 @@ function buildSheetTabPointScript(sheetName) {
 
 async function updateExistingRows(page, rows, { dryRun, layout }) {
   const scanMaxRow = Number.parseInt(process.env.WPS_UPDATE_SCAN_MAX_ROW || `${DEFAULT_SCAN_MAX_ROW}`, 10);
-  return page.evaluate(browserFunction(async (payloadRows, maxRow, shouldDryRun, sheetLayout) => {
+  const emptyRowStop = positiveInteger(
+    process.env.WPS_UPDATE_EMPTY_ROW_STOP,
+    50,
+    'WPS_UPDATE_EMPTY_ROW_STOP',
+  );
+  const scanState = await scanExistingDetailRows(page, { layout, scanMaxRow, emptyRowStop });
+  console.log(`Detail scan completed through row ${scanState.lastUsedRow}.`);
+  return page.evaluate(browserFunction(async (payloadRows, shouldDryRun, sheetLayout, scannedState) => {
     if (!window.WPSOpenApi?.Application) {
       throw new Error('WPSOpenApi.Application is not available in this WPS page.');
     }
 
     await window.WPSOpenApi.documentReadyPromise?.catch?.(() => {});
     const app = window.WPSOpenApi.Application;
-    const index = new Map();
-    const duplicateKeys = [];
+    const index = new Map(scannedState.indexEntries);
+    const duplicateKeys = scannedState.duplicateKeys;
     const dateColumn = columnName(sheetLayout.dateColumn);
     const nameColumn = columnName(sheetLayout.nameColumn);
     const salesColumn = columnName(sheetLayout.salesColumn);
-    let lastUsedRow = sheetLayout.startRow - 1;
-
-    for (let rowIndex = sheetLayout.startRow; rowIndex <= maxRow; rowIndex += 1) {
-      const dateText = normalizeDate(await cellText(app, `${dateColumn}${rowIndex}`, true));
-      const nameText = normalizeName(await cellText(app, `${nameColumn}${rowIndex}`, true));
-      const salesText = String(await cellText(app, `${salesColumn}${rowIndex}`) || '').trim();
-      if (dateText || nameText || salesText) {
-        lastUsedRow = rowIndex;
-      }
-      if (!dateText && !nameText) {
-        continue;
-      }
-      if (!dateText || !nameText) {
-        continue;
-      }
-
-      const key = `${dateText}\u0000${nameText}`;
-      if (index.has(key)) {
-        duplicateKeys.push({ key: `${dateText} / ${nameText}`, firstRow: index.get(key), duplicateRow: rowIndex });
-        continue;
-      }
-      index.set(key, rowIndex);
-    }
+    const lastUsedRow = scannedState.lastUsedRow;
 
     const updated = [];
     const appended = [];
@@ -349,8 +451,6 @@ async function updateExistingRows(page, rows, { dryRun, layout }) {
     async function writeCellValue(wpsApp, address, value) {
       const range = wpsApp.Range(address);
       range.Value = value;
-      await Promise.resolve(range.Value2 = value).catch(() => {});
-      await Promise.resolve(range.Formula = value).catch(() => {});
     }
 
     async function cellText(wpsApp, address, useMergeTopLeft = false) {
@@ -411,7 +511,92 @@ async function updateExistingRows(page, rows, { dryRun, layout }) {
       }
       return name;
     }
-  }, rows, scanMaxRow, dryRun, layout));
+  }, rows, dryRun, layout, scanState));
+}
+
+async function scanExistingDetailRows(page, { layout, scanMaxRow, emptyRowStop }) {
+  const index = new Map();
+  const duplicateKeys = [];
+  let lastUsedRow = layout.startRow - 1;
+  let consecutiveEmptyRows = 0;
+  let finished = false;
+  const columnIndexes = [layout.dateColumn, layout.nameColumn, layout.salesColumn];
+  const leftColumnIndex = Math.min(...columnIndexes);
+  const rightColumnIndex = Math.max(...columnIndexes);
+
+  for (let chunkStart = layout.startRow; chunkStart <= scanMaxRow && !finished; chunkStart += 100) {
+    const chunkEnd = Math.min(scanMaxRow, chunkStart + 99);
+    const rangeAddress = `${excelColumnName(leftColumnIndex)}${chunkStart}:` +
+      `${excelColumnName(rightColumnIndex)}${chunkEnd}`;
+    const values = await page.evaluate(browserFunction(async (scanRange) => {
+      const app = window.WPSOpenApi?.Application;
+      if (!app) throw new Error('WPSOpenApi.Application is not available in this WPS page.');
+      return await Promise.resolve(app.Range(scanRange).Value2);
+    }, rangeAddress));
+    const count = chunkEnd - chunkStart + 1;
+    const matrix = normalizeRangeMatrix(values, count);
+    const dateOffset = layout.dateColumn - leftColumnIndex;
+    const nameOffset = layout.nameColumn - leftColumnIndex;
+    const salesOffset = layout.salesColumn - leftColumnIndex;
+
+    for (let offset = 0; offset < count; offset += 1) {
+      const rowIndex = chunkStart + offset;
+      const dateText = normalizeScannedDate(matrix[offset][dateOffset]);
+      const nameText = String(matrix[offset][nameOffset] ?? '').trim();
+      const salesText = String(matrix[offset][salesOffset] ?? '').trim();
+      if (dateText || nameText || salesText) {
+        lastUsedRow = rowIndex;
+        consecutiveEmptyRows = 0;
+      } else {
+        consecutiveEmptyRows += 1;
+        if (consecutiveEmptyRows >= emptyRowStop) {
+          finished = true;
+          break;
+        }
+      }
+      if (!dateText || !nameText) continue;
+      const key = `${dateText}\u0000${nameText}`;
+      if (index.has(key)) {
+        duplicateKeys.push({
+          key: `${dateText} / ${nameText}`,
+          firstRow: index.get(key),
+          duplicateRow: rowIndex,
+        });
+        continue;
+      }
+      index.set(key, rowIndex);
+    }
+  }
+  return { indexEntries: [...index.entries()], duplicateKeys, lastUsedRow };
+}
+
+function normalizeRangeMatrix(value, expectedLength) {
+  const sourceRows = Array.isArray(value) ? value : [[value]];
+  const rows = sourceRows.map((row) => Array.isArray(row) ? row : [row]);
+  while (rows.length < expectedLength) rows.push([]);
+  return rows;
+}
+
+function normalizeScannedDate(value) {
+  const text = String(value ?? '').trim();
+  if (/^\d{4,6}(\.\d+)?$/.test(text) && Number(text) > 20000) {
+    const parsed = new Date(Date.UTC(1899, 11, 30) + Math.floor(Number(text)) * 86400000);
+    return `${parsed.getUTCFullYear()}/${parsed.getUTCMonth() + 1}/${parsed.getUTCDate()}`;
+  }
+  const normalized = text.replace(/[年月\-]/g, '/').replace(/日/g, '').replace(/\/+/g, '/');
+  const match = normalized.match(/^(\d{4})\/(\d{1,2})\/(\d{1,2})$/);
+  return match ? `${Number(match[1])}/${Number(match[2])}/${Number(match[3])}` : normalized;
+}
+
+function excelColumnName(column) {
+  let name = '';
+  let value = column;
+  while (value > 0) {
+    const remainder = (value - 1) % 26;
+    name = String.fromCharCode(65 + remainder) + name;
+    value = Math.floor((value - 1) / 26);
+  }
+  return name;
 }
 
 function printUpdateResult(result) {
@@ -458,6 +643,15 @@ function printUpdateResult(result) {
 
 function browserFunction(fn, ...args) {
   return `(${fn.toString()})(...${JSON.stringify(args)})`;
+}
+
+function isRecoverableNavigationError(error) {
+  const message = String(error?.message || error || '').toLowerCase();
+  return message.includes('navigated or closed') ||
+    message.includes('websocket') ||
+    message.includes('target closed') ||
+    message.includes('promise was collected') ||
+    message.includes('login required after attempted write');
 }
 
 function sleep(ms) {

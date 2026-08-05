@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { resolve } from 'node:path';
 import {
   normalizeAccount,
   parseOutputMode,
@@ -31,8 +32,8 @@ test('OUTPUT_MODE=1 only maps the standalone export target', () => {
   );
 
   assert.equal(account.outputMode, 1);
-  assert.equal(account.exportExcelPath, '/project/exports/temu1.xlsx');
-  assert.equal(account.env.SKU_SALES_EXCEL_PATH, '/project/exports/temu1.xlsx');
+  assert.equal(account.exportExcelPath, resolve('/project', 'exports/temu1.xlsx'));
+  assert.equal(account.env.SKU_SALES_EXCEL_PATH, resolve('/project', 'exports/temu1.xlsx'));
   assert.equal(account.env.WPS_DOC_URL, undefined);
   assert.equal(account.env.LOCAL_TARGET_EXCEL_PATH, undefined);
 });
@@ -54,7 +55,7 @@ test('OUTPUT_MODE=2 only maps the existing local Excel target', () => {
   );
 
   assert.equal(account.outputMode, 2);
-  assert.equal(account.env.LOCAL_TARGET_EXCEL_PATH, '/project/targets/temu1.xlsx');
+  assert.equal(account.env.LOCAL_TARGET_EXCEL_PATH, resolve('/project', 'targets/temu1.xlsx'));
   assert.equal(account.env.LOCAL_TARGET_EXCEL_SHEET_NAME, '运营数据记录表');
   assert.equal(account.env.LOCAL_TARGET_DATE_COLUMN, 'A');
   assert.equal(account.env.LOCAL_TARGET_NAME_COLUMN, 'B');
@@ -74,6 +75,12 @@ test('OUTPUT_MODE=3 maps explicit WPS columns without a group title', () => {
       wpsNameColumn: 'F',
       wpsSalesColumn: 'G',
       wpsStartRow: '3',
+      wpsDailyTotalEnabled: '1',
+      wpsTotalDocUrl: 'https://www.kdocs.cn/l/totals1',
+      wpsTotalSheetName: '总销量表',
+      wpsTotalDateColumn: 'A',
+      wpsTotalSalesColumn: 'B',
+      wpsTotalStartRow: '3',
     },
     '/project',
     0,
@@ -87,6 +94,11 @@ test('OUTPUT_MODE=3 maps explicit WPS columns without a group title', () => {
   assert.equal(account.env.WPS_NAME_COLUMN, 'F');
   assert.equal(account.env.WPS_SALES_COLUMN, 'G');
   assert.equal(account.env.WPS_START_ROW, '3');
+  assert.equal(account.env.WPS_TOTAL_DOC_URL, 'https://www.kdocs.cn/l/totals1');
+  assert.equal(account.env.WPS_TOTAL_SHEET_NAME, '总销量表');
+  assert.equal(account.env.WPS_TOTAL_DATE_COLUMN, 'A');
+  assert.equal(account.env.WPS_TOTAL_SALES_COLUMN, 'B');
+  assert.equal(account.env.WPS_TOTAL_START_ROW, '3');
   assert.equal(account.env.SKU_SALES_EXCEL_PATH, undefined);
   assert.equal(account.env.LOCAL_TARGET_EXCEL_PATH, undefined);
 });
@@ -106,6 +118,11 @@ test('ACCOUNT_COUNT dynamically reads a future ACCOUNT_3 block', () => {
     ACCOUNT_3_WPS_NAME_COLUMN: 'K',
     ACCOUNT_3_WPS_SALES_COLUMN: 'L',
     ACCOUNT_3_WPS_START_ROW: '5',
+    ACCOUNT_3_WPS_TOTAL_DOC_URL: 'https://www.kdocs.cn/l/totals',
+    ACCOUNT_3_WPS_TOTAL_SHEET_NAME: '总销量表',
+    ACCOUNT_3_WPS_TOTAL_DATE_COLUMN: 'J',
+    ACCOUNT_3_WPS_TOTAL_SALES_COLUMN: 'K',
+    ACCOUNT_3_WPS_TOTAL_START_ROW: '3',
   });
 
   assert.equal(accounts.length, 3);

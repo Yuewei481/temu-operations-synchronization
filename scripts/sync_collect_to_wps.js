@@ -53,6 +53,11 @@ export async function syncOneAccount(options = {}) {
     }
 
     await runStep('Build date/name/sales update payload', pythonBin, ['scripts/build_wps_append_payload.py', sourceExcelPath], env);
+    await assertFreshFile(
+      resolve(env.WPS_UPDATE_PAYLOAD || env.WPS_APPEND_PAYLOAD || 'output/wps-append-payload.json'),
+      collectionStartedAt,
+      'Matched sales update payload',
+    );
     if (outputMode === 2) {
       await runStep('Update local target Excel', pythonBin, ['scripts/update_local_excel.py'], env);
       succeeded = true;
@@ -61,6 +66,25 @@ export async function syncOneAccount(options = {}) {
     }
 
     await runStep('Update WPS target Excel', process.execPath, ['scripts/update_wps_existing_rows_cdp.js'], env);
+
+    if (truthy(env.WPS_DAILY_TOTAL_ENABLED)) {
+      const dailyTotalPayloadPath = resolve(env.WPS_DAILY_TOTAL_PAYLOAD);
+      await rm(dailyTotalPayloadPath, { force: true });
+      const totalsStartedAt = Date.now();
+      await runStep(
+        'Build daily totals from matched products',
+        pythonBin,
+        ['scripts/build_daily_sales_totals.py'],
+        env,
+      );
+      await assertFreshFile(dailyTotalPayloadPath, totalsStartedAt, 'Daily sales total payload');
+      await runStep(
+        'Update WPS daily sales totals',
+        process.execPath,
+        ['scripts/update_wps_daily_totals_cdp.js'],
+        env,
+      );
+    }
 
     succeeded = true;
     console.log('Sync workflow finished.');
@@ -117,6 +141,22 @@ function validateOutputModeEnv(env, mode) {
   ]) {
     requireEnv(env, key);
   }
+  if (truthy(env.WPS_DAILY_TOTAL_ENABLED)) {
+    for (const key of [
+      'WPS_DAILY_TOTAL_PAYLOAD',
+      'WPS_TOTAL_DOC_URL',
+      'WPS_TOTAL_SHEET_NAME',
+      'WPS_TOTAL_DATE_COLUMN',
+      'WPS_TOTAL_SALES_COLUMN',
+      'WPS_TOTAL_START_ROW',
+    ]) {
+      requireEnv(env, key);
+    }
+    if (String(env.WPS_TOTAL_DATE_COLUMN).trim().toUpperCase() ===
+        String(env.WPS_TOTAL_SALES_COLUMN).trim().toUpperCase()) {
+      throw new Error('WPS_TOTAL_DATE_COLUMN and WPS_TOTAL_SALES_COLUMN must be different.');
+    }
+  }
 }
 
 function requireEnv(env, key) {
@@ -135,6 +175,21 @@ async function assertFreshSalesData(collectionStartedAt) {
 
   if (fileStats.mtimeMs + 1000 < collectionStartedAt) {
     throw new Error('Sales collection did not refresh output/sales-data.json. Excel export was stopped.');
+  }
+}
+
+async function assertFreshFile(path, startedAt, label) {
+  if (!path) {
+    throw new Error(`${label} path is not configured.`);
+  }
+  let fileStats;
+  try {
+    fileStats = await stat(path);
+  } catch {
+    throw new Error(`${label} was not created at ${path}.`);
+  }
+  if (fileStats.mtimeMs + 1000 < startedAt) {
+    throw new Error(`${label} was not refreshed at ${path}.`);
   }
 }
 

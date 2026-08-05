@@ -2,10 +2,27 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   buildTrendRefreshRange,
+  buildTrendRefreshRangeOutsideCurrent,
+  expectedRowsOnPage,
   normalizeSheinCargoNumber,
+  paginationHasNextPage,
   parseSalesTooltip,
   trendChartMatchesRange,
 } from '../scripts/collect_shein_sales_cdp.js';
+
+test('detects the next SHEIN page from numeric pagination buttons', () => {
+  assert.equal(paginationHasNextPage(1, 2, [1, 2], false), true);
+  assert.equal(paginationHasNextPage(2, 2, [1, 2], true), false);
+  assert.equal(paginationHasNextPage(3, null, [3], true), true);
+  assert.equal(paginationHasNextPage(1, 10, [1, 10], true), true);
+});
+
+test('calculates the expected product count for each SHEIN page', () => {
+  assert.equal(expectedRowsOnPage(1, 11, 10), 10);
+  assert.equal(expectedRowsOnPage(2, 11, 10), 1);
+  assert.equal(expectedRowsOnPage(2, 20, 10), 10);
+  assert.equal(expectedRowsOnPage(3, 21, 10), 1);
+});
 
 test('normalizes a SHEIN supplier cargo number to digits only', () => {
   assert.equal(normalizeSheinCargoNumber('PP-202512102'), '202512102');
@@ -37,6 +54,25 @@ test('builds a different valid range to force the SHEIN chart to refresh', () =>
     start: '2026-07-29',
     end: '2026-07-29',
   });
+});
+
+test('builds a temporary single-day range outside the currently displayed range', () => {
+  assert.deepEqual(
+    buildTrendRefreshRangeOutsideCurrent(
+      '2026-07-31',
+      '2026-07-31',
+      { start: '2026/07/23', end: '2026/07/30' },
+    ),
+    { start: '2026-07-22', end: '2026-07-22' },
+  );
+  assert.deepEqual(
+    buildTrendRefreshRangeOutsideCurrent(
+      '2026-07-31',
+      '2026-07-31',
+      { start: '2026/07/31', end: '2026/07/31' },
+    ),
+    { start: '2026-07-30', end: '2026-07-30' },
+  );
 });
 
 test('detects stale SHEIN chart axis dates even when date inputs look correct', () => {

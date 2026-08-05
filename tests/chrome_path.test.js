@@ -24,6 +24,17 @@ test('detects Chrome from LOCALAPPDATA on Windows', () => {
   assert.equal(result, expected);
 });
 
+test('detects Chrome when Windows exposes ProgramFiles with mixed casing', () => {
+  const expected = 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
+  assert.equal(
+    resolveChromePath(
+      { ProgramFiles: 'C:\\Program Files' },
+      { platform: 'win32', pathExists: (value) => value === expected },
+    ),
+    expected,
+  );
+});
+
 test('lists all standard Windows Chrome locations', () => {
   const candidates = chromePathCandidates(
     {

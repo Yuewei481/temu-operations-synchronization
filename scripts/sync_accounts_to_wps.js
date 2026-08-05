@@ -20,6 +20,13 @@ const ACCOUNT_TARGET_ENV_KEYS = [
   'WPS_NAME_COLUMN',
   'WPS_SALES_COLUMN',
   'WPS_START_ROW',
+  'WPS_DAILY_TOTAL_ENABLED',
+  'WPS_TOTAL_DOC_URL',
+  'WPS_TOTAL_SHEET_NAME',
+  'WPS_TOTAL_DATE_COLUMN',
+  'WPS_TOTAL_SALES_COLUMN',
+  'WPS_TOTAL_START_ROW',
+  'WPS_DAILY_TOTAL_PAYLOAD',
 ];
 
 async function main() {
@@ -135,6 +142,14 @@ export function readAccountsFromEnv(env) {
     wpsNameColumn: env[`ACCOUNT_${index}_WPS_NAME_COLUMN`],
     wpsSalesColumn: env[`ACCOUNT_${index}_WPS_SALES_COLUMN`],
     wpsStartRow: env[`ACCOUNT_${index}_WPS_START_ROW`],
+    wpsDailyTotalEnabled:
+      env[`ACCOUNT_${index}_WPS_DAILY_TOTAL_ENABLED`] ?? env.WPS_DAILY_TOTAL_ENABLED ?? '1',
+    wpsTotalDocUrl: env[`ACCOUNT_${index}_WPS_TOTAL_DOC_URL`],
+    wpsTotalSheetName: env[`ACCOUNT_${index}_WPS_TOTAL_SHEET_NAME`],
+    wpsTotalDateColumn: env[`ACCOUNT_${index}_WPS_TOTAL_DATE_COLUMN`],
+    wpsTotalSalesColumn: env[`ACCOUNT_${index}_WPS_TOTAL_SALES_COLUMN`],
+    wpsTotalStartRow: env[`ACCOUNT_${index}_WPS_TOTAL_START_ROW`],
+    wpsDailyTotalPayload: env[`ACCOUNT_${index}_WPS_DAILY_TOTAL_PAYLOAD`],
     sellerPhoneCountryCode: env[`ACCOUNT_${index}_SELLER_PHONE_COUNTRY_CODE`],
     sellerPhone: env[`ACCOUNT_${index}_SELLER_PHONE`],
     sellerPassword: env[`ACCOUNT_${index}_SELLER_PASSWORD`],
@@ -205,6 +220,15 @@ export function normalizeAccount(rawAccount, configDir, index, baseEnv = process
   const targetExcelPath = outputMode === 2
     ? resolveConfigPath(rawAccount.targetExcelPath, configDir)
     : '';
+  const wpsDailyTotalEnabled = outputMode === 3 && booleanFlag(
+    rawAccount.wpsDailyTotalEnabled ?? baseEnv.WPS_DAILY_TOTAL_ENABLED ?? '1',
+  );
+  const wpsDailyTotalPayloadPath = wpsDailyTotalEnabled
+    ? resolveConfigPath(
+      rawAccount.wpsDailyTotalPayload || `output/temu-account-${index + 1}-daily-totals.json`,
+      configDir,
+    )
+    : '';
 
   if (!sourceExcel) {
     throw new Error(`Account "${name}" is missing sourceExcel.`);
@@ -218,6 +242,7 @@ export function normalizeAccount(rawAccount, configDir, index, baseEnv = process
     outputMode,
     exportExcelPath,
     targetExcelPath,
+    wpsDailyTotalEnabled,
   });
 
   const extraEnv = { ...(rawAccount.env || {}) };
@@ -255,6 +280,17 @@ export function normalizeAccount(rawAccount, configDir, index, baseEnv = process
       WPS_NAME_COLUMN: rawAccount.wpsNameColumn,
       WPS_SALES_COLUMN: rawAccount.wpsSalesColumn,
       WPS_START_ROW: rawAccount.wpsStartRow,
+      ...(wpsDailyTotalEnabled ? {
+        WPS_DAILY_TOTAL_ENABLED: '1',
+        WPS_TOTAL_DOC_URL: rawAccount.wpsTotalDocUrl,
+        WPS_TOTAL_SHEET_NAME: rawAccount.wpsTotalSheetName,
+        WPS_TOTAL_DATE_COLUMN: rawAccount.wpsTotalDateColumn,
+        WPS_TOTAL_SALES_COLUMN: rawAccount.wpsTotalSalesColumn,
+        WPS_TOTAL_START_ROW: rawAccount.wpsTotalStartRow,
+        WPS_DAILY_TOTAL_PAYLOAD: wpsDailyTotalPayloadPath,
+      } : {
+        WPS_DAILY_TOTAL_ENABLED: '0',
+      }),
     } : {}),
     SELLER_PHONE_COUNTRY_CODE: rawAccount.sellerPhoneCountryCode,
     SELLER_PHONE: rawAccount.sellerPhone,
@@ -291,6 +327,16 @@ export function normalizeAccount(rawAccount, configDir, index, baseEnv = process
     outputMode,
     exportExcelPath,
     targetExcelPath,
+    wpsDailyTotalEnabled,
+    wpsDailyTotalPayloadPath,
+    wpsTotalTargetKey: wpsDailyTotalEnabled
+      ? [
+        rawAccount.wpsTotalDocUrl,
+        rawAccount.wpsTotalSheetName,
+        String(rawAccount.wpsTotalDateColumn || '').toUpperCase(),
+        String(rawAccount.wpsTotalSalesColumn || '').toUpperCase(),
+      ].join('|')
+      : '',
     env,
   };
 }
@@ -300,6 +346,16 @@ export function validateUniqueAccountSettings(accounts) {
   assertUnique(accounts, 'chromeProfile', 'Chrome profile');
   assertUniqueNonEmpty(accounts.filter((account) => account.outputMode === 1), 'exportExcelPath', 'export Excel path');
   assertUniqueNonEmpty(accounts.filter((account) => account.outputMode === 2), 'targetExcelPath', 'target Excel path');
+  assertUniqueNonEmpty(
+    accounts.filter((account) => account.wpsDailyTotalEnabled),
+    'wpsDailyTotalPayloadPath',
+    'daily-total payload path',
+  );
+  assertUniqueNonEmpty(
+    accounts.filter((account) => account.wpsDailyTotalEnabled),
+    'wpsTotalTargetKey',
+    'WPS daily-total target',
+  );
 }
 
 export function parseOutputMode(value) {
@@ -311,7 +367,7 @@ export function parseOutputMode(value) {
 }
 
 function validateModeSpecificAccount(rawAccount, account) {
-  const { name, outputMode, exportExcelPath, targetExcelPath } = account;
+  const { name, outputMode, exportExcelPath, targetExcelPath, wpsDailyTotalEnabled } = account;
   if (outputMode === 1) {
     requireSetting(exportExcelPath, name, 'exportExcelPath (ACCOUNT_n_EXPORT_EXCEL_PATH)');
     return;
@@ -333,6 +389,24 @@ function validateModeSpecificAccount(rawAccount, account) {
   requireSetting(rawAccount.wpsNameColumn, name, 'wpsNameColumn');
   requireSetting(rawAccount.wpsSalesColumn, name, 'wpsSalesColumn');
   requirePositiveInteger(rawAccount.wpsStartRow, name, 'wpsStartRow');
+  if (wpsDailyTotalEnabled) {
+    requireSetting(rawAccount.wpsTotalDocUrl, name, 'wpsTotalDocUrl (ACCOUNT_n_WPS_TOTAL_DOC_URL)');
+    requireSetting(rawAccount.wpsTotalSheetName, name, 'wpsTotalSheetName');
+    requireSetting(rawAccount.wpsTotalDateColumn, name, 'wpsTotalDateColumn');
+    requireSetting(rawAccount.wpsTotalSalesColumn, name, 'wpsTotalSalesColumn');
+    requirePositiveInteger(rawAccount.wpsTotalStartRow, name, 'wpsTotalStartRow');
+    if (String(rawAccount.wpsTotalDateColumn).trim().toUpperCase() ===
+        String(rawAccount.wpsTotalSalesColumn).trim().toUpperCase()) {
+      throw new Error(`Account "${name}" must use different WPS total date and sales columns.`);
+    }
+  }
+}
+
+function booleanFlag(value) {
+  const text = String(value ?? '').trim().toLowerCase();
+  if (['1', 'true', 'yes', 'on'].includes(text)) return true;
+  if (['0', 'false', 'no', 'off'].includes(text)) return false;
+  throw new Error(`Invalid boolean flag: ${value}`);
 }
 
 function requireSetting(value, accountName, settingName) {

@@ -37,6 +37,9 @@ export async function syncOneSheinAccount(account) {
     await ensureChromeCdpAndSheinTab(env);
     await rm(account.salesDataPath, { force: true });
     await rm(account.wpsPayloadPath, { force: true });
+    if (account.wpsDailyTotalEnabled) {
+      await rm(account.dailyTotalsPayloadPath, { force: true });
+    }
     if (outputMode === 1) {
       await rm(account.exportExcelPath, { force: true });
     }
@@ -73,6 +76,26 @@ export async function syncOneSheinAccount(account) {
       ['scripts/update_wps_existing_rows_cdp.js'],
       env,
     );
+    if (account.wpsDailyTotalEnabled) {
+      const totalsStartedAt = Date.now();
+      await runStep(
+        'Build SHEIN daily totals from matched products',
+        pythonBin,
+        ['scripts/build_daily_sales_totals.py'],
+        env,
+      );
+      await assertFreshFile(
+        account.dailyTotalsPayloadPath,
+        totalsStartedAt,
+        'SHEIN daily sales total payload',
+      );
+      await runStep(
+        'Update SHEIN WPS daily sales totals',
+        process.execPath,
+        ['scripts/update_wps_daily_totals_cdp.js'],
+        env,
+      );
+    }
     succeeded = true;
     console.log('SHEIN collection and WPS update finished.');
   } finally {

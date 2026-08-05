@@ -4,6 +4,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from io import BytesIO
 from pathlib import Path
 
 from openpyxl import Workbook, load_workbook
@@ -19,6 +20,7 @@ class SheinOutputPipelineTest(unittest.TestCase):
             source_path = temporary_path / "shared-lookup.xlsx"
             sales_path = temporary_path / "shein-sales.json"
             payload_path = temporary_path / "wps-payload.json"
+            daily_totals_path = temporary_path / "daily-totals.json"
             export_path = temporary_path / "shein-sales.xlsx"
 
             workbook = Workbook()
@@ -73,6 +75,7 @@ class SheinOutputPipelineTest(unittest.TestCase):
                 "SOURCE_EXCEL_NAME_COLUMN": "C",
                 "SOURCE_EXCEL_IMAGE_COLUMN": "",
                 "WPS_UPDATE_PAYLOAD": str(payload_path),
+                "WPS_DAILY_TOTAL_PAYLOAD": str(daily_totals_path),
                 "SKU_SALES_EXCEL_PATH": str(export_path),
             }
 
@@ -101,6 +104,24 @@ class SheinOutputPipelineTest(unittest.TestCase):
             self.assertNotIn("Wrong Secondary Name", {row["name"] for row in payload["rows"]})
 
             subprocess.run(
+                [sys.executable, "scripts/build_daily_sales_totals.py"],
+                cwd=PROJECT_ROOT,
+                env=environment,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            daily_totals = json.loads(daily_totals_path.read_text(encoding="utf-8"))
+            self.assertEqual(
+                daily_totals["rows"],
+                [
+                    {"date": "2026/8/1", "sales": 8},
+                    {"date": "2026/8/2", "sales": 10},
+                ],
+            )
+            self.assertEqual(daily_totals["diagnostics"]["products"], 2)
+
+            subprocess.run(
                 [sys.executable, "scripts/export_sku_sales_excel.py"],
                 cwd=PROJECT_ROOT,
                 env=environment,
@@ -108,7 +129,7 @@ class SheinOutputPipelineTest(unittest.TestCase):
                 capture_output=True,
                 text=True,
             )
-            exported = load_workbook(export_path, data_only=True)
+            exported = load_workbook(BytesIO(export_path.read_bytes()), data_only=True)
             self.assertEqual(set(exported.sheetnames), {"2026-08-01", "2026-08-02"})
             self.assertEqual(
                 list(exported["2026-08-01"].values),

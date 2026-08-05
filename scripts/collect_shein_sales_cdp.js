@@ -31,6 +31,7 @@ export async function collectSheinSales(env = process.env) {
   let page = await connectSheinPage(cdpOrigin, (url) => url.includes('#/sbn/merchandise/details'));
   try {
     await waitForProductList(page, 120000);
+    await ensureFirstProductPage(page);
     const result = await collectAllProducts(page, {
       targetDates,
       dateRanges,
@@ -47,6 +48,7 @@ export async function collectSheinSales(env = process.env) {
         visitedProducts: result.visitedProducts,
         uniqueCargoNumbers: result.records.length,
         pages: result.pages,
+        expectedPages: result.expectedPages,
       },
     };
     await mkdir(dirname(outputPath), { recursive: true });
@@ -137,6 +139,7 @@ async function collectAllProducts(page, options) {
   let visitedProducts = 0;
   let pageNumber = 0;
   let expectedProducts = null;
+  let expectedPages = null;
 
   while (true) {
     pageNumber += 1;
@@ -144,8 +147,22 @@ async function collectAllProducts(page, options) {
     if (!state.rows.length) {
       throw new Error(`SHEIN page ${pageNumber} contains no identifiable product rows.`);
     }
+    const expectedRows = expectedRowsOnPage(
+      state.currentPage,
+      state.expectedProducts,
+      state.pageSize,
+    );
+    if (expectedRows !== null && state.rows.length !== expectedRows) {
+      throw new Error(
+        `SHEIN page ${state.currentPage} was not stable: expected ${expectedRows} rows, ` +
+        `but found ${state.rows.length}.`,
+      );
+    }
     if (state.expectedProducts !== null) {
       expectedProducts = state.expectedProducts;
+    }
+    if (state.totalPages !== null) {
+      expectedPages = state.totalPages;
     }
     const signature = state.rows.map((row) => row.cargoNumber).join('|');
     if (seenPageSignatures.has(signature)) {
@@ -153,7 +170,10 @@ async function collectAllProducts(page, options) {
     }
     seenPageSignatures.add(signature);
 
-    console.log(`Reading SHEIN product page ${pageNumber}: ${state.rows.length} row(s).`);
+    console.log(
+      `Reading SHEIN product page ${state.currentPage}` +
+      `${state.totalPages ? `/${state.totalPages}` : ''}: ${state.rows.length} row(s).`,
+    );
     for (let index = 0; index < state.rows.length; index += 1) {
       const row = state.rows[index];
       visitedProducts += 1;
@@ -203,7 +223,7 @@ async function collectAllProducts(page, options) {
       break;
     }
     await humanPause('opening next SHEIN product page', options.humanDelay);
-    await clickNextProductPage(page, signature);
+    await clickNextProductPage(page, signature, state.currentPage);
   }
 
   if (expectedProducts !== null && visitedProducts !== expectedProducts) {
@@ -211,16 +231,23 @@ async function collectAllProducts(page, options) {
       `SHEIN completeness check failed: page footer reports ${expectedProducts} products, but ${visitedProducts} rows were visited.`,
     );
   }
+  if (expectedPages !== null && pageNumber !== expectedPages) {
+    throw new Error(
+      `SHEIN completeness check failed: pagination reports ${expectedPages} pages, ` +
+      `but ${pageNumber} pages were visited.`,
+    );
+  }
   return {
     records: [...recordsByCargo.values()],
     expectedProducts,
     visitedProducts,
     pages: pageNumber,
+    expectedPages,
   };
 }
 
-async function inspectProductList(page) {
-  return page.evaluate(`(() => {
+export async function inspectProductList(page) {
+  const state = await page.evaluate(`(() => {
     const visible = (element) => {
       if (!element) return false;
       const style = getComputedStyle(element);
@@ -240,19 +267,101 @@ async function inspectProductList(page) {
     }
     const bodyText = document.body.innerText || '';
     const totalMatch = /共\\s*(\\d+)\\s*条/.exec(bodyText);
-    const next = [...document.querySelectorAll('button, li, a')].find((element) => {
-      if (!visible(element)) return false;
-      const label = [element.innerText, element.getAttribute('aria-label'), element.title].filter(Boolean).join(' ');
-      return /下一页|next/i.test(label) || element.classList.contains('ant-pagination-next');
-    });
-    const disabled = !next || next.disabled || next.getAttribute('aria-disabled') === 'true' ||
-      next.classList.contains('ant-pagination-disabled');
+    const pagination = [...document.querySelectorAll('.soui-pagination, .ant-pagination')].find(visible);
+    const paginationButtons = pagination ? [...pagination.querySelectorAll('button')].filter(visible) : [];
+    const numberedButtons = paginationButtons
+      .map((element) => ({
+        page: /^\\d+$/.test((element.innerText || '').trim()) ? Number((element.innerText || '').trim()) : null,
+        current: element.classList.contains('soui-button-primary') ||
+          element.classList.contains('ant-pagination-item-active') || element.getAttribute('aria-current') === 'page',
+      }))
+      .filter((item) => item.page !== null);
+    const currentPage = numberedButtons.find((item) => item.current)?.page || numberedButtons[0]?.page || 1;
+    const pageSizeMatch = /(\\d+)\\s*\\/\\s*[^\\d\\s]+/.exec(pagination?.innerText || '');
+    const pageSize = pageSizeMatch ? Number(pageSizeMatch[1]) : null;
+    const totalPages = totalMatch && pageSize ? Math.ceil(Number(totalMatch[1]) / pageSize) : null;
+    const lastButton = paginationButtons.at(-1);
+    const arrowNextEnabled = Boolean(lastButton && !lastButton.disabled &&
+      lastButton.getAttribute('aria-disabled') !== 'true' &&
+      !lastButton.classList.contains('ant-pagination-disabled'));
     return {
       rows,
       expectedProducts: totalMatch ? Number(totalMatch[1]) : null,
-      hasNextPage: !disabled,
+      currentPage,
+      pageSize,
+      totalPages,
+      pageNumbers: numberedButtons.map((item) => item.page),
+      arrowNextEnabled,
     };
   })()`);
+  return {
+    ...state,
+    hasNextPage: paginationHasNextPage(
+      state.currentPage,
+      state.totalPages,
+      state.pageNumbers,
+      state.arrowNextEnabled,
+    ),
+  };
+}
+
+export function paginationHasNextPage(
+  currentPage,
+  totalPages,
+  pageNumbers,
+  arrowNextEnabled = false,
+) {
+  if (Number.isInteger(totalPages) && totalPages > 0) return currentPage < totalPages;
+  return pageNumbers.includes(currentPage + 1) || Boolean(arrowNextEnabled);
+}
+
+export function expectedRowsOnPage(currentPage, totalProducts, pageSize) {
+  if (!Number.isInteger(currentPage) || currentPage < 1 ||
+      !Number.isInteger(totalProducts) || totalProducts < 0 ||
+      !Number.isInteger(pageSize) || pageSize < 1) return null;
+  const remaining = totalProducts - (currentPage - 1) * pageSize;
+  return Math.max(0, Math.min(pageSize, remaining));
+}
+
+export async function ensureFirstProductPage(page) {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    const state = await inspectProductList(page);
+    const expectedRows = expectedRowsOnPage(1, state.expectedProducts, state.pageSize);
+    if (state.currentPage <= 1 &&
+        (expectedRows === null || state.rows.length === expectedRows)) return;
+    if (state.currentPage <= 1) {
+      await sleep(300);
+      continue;
+    }
+    const previousSignature = state.rows.map((row) => row.cargoNumber).join('|');
+    const clicked = await page.evaluate(`(() => {
+      const visible = (element) => {
+        const rect = element?.getBoundingClientRect();
+        return Boolean(rect && rect.width > 0 && rect.height > 0);
+      };
+      const pagination = [...document.querySelectorAll('.soui-pagination, .ant-pagination')].find(visible);
+      if (!pagination) return false;
+      const buttons = [...pagination.querySelectorAll('button')].filter(visible);
+      const firstPage = buttons.find((button) => (button.innerText || '').trim() === '1');
+      const previous = firstPage || buttons.find((button) =>
+        !/^\\d+$/.test((button.innerText || '').trim()) && !button.disabled
+      );
+      if (!previous) return false;
+      previous.click();
+      return true;
+    })()`);
+    if (!clicked) throw new Error(`Unable to return SHEIN pagination from page ${state.currentPage} to page 1.`);
+    const deadline = Date.now() + 30000;
+    while (Date.now() < deadline) {
+      const nextState = await inspectProductList(page);
+      const signature = nextState.rows.map((row) => row.cargoNumber).join('|');
+      const firstPageRows = expectedRowsOnPage(1, nextState.expectedProducts, nextState.pageSize);
+      if (nextState.currentPage === 1 && signature && signature !== previousSignature &&
+          (firstPageRows === null || nextState.rows.length === firstPageRows)) break;
+      await sleep(300);
+    }
+  }
+  throw new Error('SHEIN product pagination did not return to page 1.');
 }
 
 async function openTrendForCargo(page, cargoNumber) {
@@ -439,11 +548,7 @@ async function inspectMetricCheckboxes(page) {
 }
 
 async function openTrendDatePicker(page, placeholder) {
-  if (await isDatePickerOpen(page)) {
-    // Both the start and end calendars are rendered together. Clicking the
-    // second input while the picker is open can reset the first selection.
-    return;
-  }
+  const pickerWasOpen = await isDatePickerOpen(page);
 
   const input = await page.evaluate(`(() => {
     const placeholder = ${JSON.stringify(placeholder)};
@@ -471,6 +576,21 @@ async function openTrendDatePicker(page, placeholder) {
   if (!input) {
     throw new Error(`SHEIN trend ${placeholder} input was not found.`);
   }
+
+  if (pickerWasOpen) {
+    await page.click(input.input.x, input.input.y);
+    await sleep(500);
+    const deadline = Date.now() + 3500;
+    while (Date.now() < deadline) {
+      if (await isDatePickerOpen(page)) {
+        const activePlaceholder = await activeTrendDateInputPlaceholder(page);
+        if (activePlaceholder === placeholder) return;
+      }
+      await sleep(150);
+    }
+    throw new Error(`SHEIN trend date picker did not activate ${placeholder}.`);
+  }
+
   const clickPoints = [input.input, input.result, input.input].filter(Boolean);
   for (const point of clickPoints) {
     await focusTrendDateInput(page, placeholder);
@@ -478,7 +598,10 @@ async function openTrendDatePicker(page, placeholder) {
     await page.click(point.x, point.y);
     const deadline = Date.now() + 3500;
     while (Date.now() < deadline) {
-      if (await isDatePickerOpen(page)) return;
+      if (await isDatePickerOpen(page)) {
+        await sleep(350);
+        return;
+      }
       await sleep(200);
     }
   }
@@ -509,7 +632,10 @@ async function openTrendDatePicker(page, placeholder) {
   if (dispatched) {
     const deadline = Date.now() + 5000;
     while (Date.now() < deadline) {
-      if (await isDatePickerOpen(page)) return;
+      if (await isDatePickerOpen(page)) {
+        await sleep(350);
+        return;
+      }
       await sleep(200);
     }
   }
@@ -547,16 +673,53 @@ async function isDatePickerOpen(page) {
 
 async function closeTrendDatePicker(page) {
   if (!await isDatePickerOpen(page)) return;
-  for (let attempt = 0; attempt < 3; attempt += 1) {
-    await page.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape' });
-    await page.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Escape', code: 'Escape' });
-    const deadline = Date.now() + 2500;
-    while (Date.now() < deadline) {
-      if (!await isDatePickerOpen(page)) return;
-      await sleep(150);
-    }
+  const dismissPoint = await page.evaluate(`(() => {
+    const visible = (element) => {
+      const rect = element?.getBoundingClientRect();
+      return Boolean(rect && rect.width > 0 && rect.height > 0);
+    };
+    const modal = [...document.querySelectorAll('.soui-modal-panel, [role="dialog"], .ant-modal, .el-dialog')]
+      .find((element) => visible(element) && (element.innerText || '').includes('趋势图') &&
+        (element.innerText || '').includes('统计时间'));
+    const header = modal?.querySelector('.soui-modal-header, .ant-modal-header') || modal;
+    if (!header) return null;
+    const rect = header.getBoundingClientRect();
+    return { x: rect.x + Math.min(120, rect.width / 3), y: rect.y + Math.min(24, rect.height / 2) };
+  })()`);
+  if (!dismissPoint) {
+    throw new Error('SHEIN trend date picker could not find a safe dismiss point.');
   }
-  throw new Error('SHEIN trend date picker remained open after Escape.');
+  await page.click(dismissPoint.x, dismissPoint.y);
+  const deadline = Date.now() + 5000;
+  while (Date.now() < deadline) {
+    if (!await isDatePickerOpen(page)) return;
+    await sleep(150);
+  }
+  throw new Error('SHEIN trend date picker remained open after clicking the modal header.');
+}
+
+async function activeTrendDateInputPlaceholder(page) {
+  return page.evaluate(`(() => {
+    const active = document.activeElement;
+    return active instanceof HTMLInputElement ? active.placeholder || '' : '';
+  })()`);
+}
+
+async function waitForTrendDateInputValue(page, placeholder, expectedValue, timeoutMs = 3000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const value = await page.evaluate(`(() => {
+      const placeholder = ${JSON.stringify(placeholder)};
+      const input = [...document.querySelectorAll('input')].find((element) => {
+        const rect = element.getBoundingClientRect();
+        return rect.width > 0 && rect.height > 0 && element.placeholder === placeholder;
+      });
+      return input?.value || '';
+    })()`);
+    if (value === expectedValue) return true;
+    await sleep(150);
+  }
+  return false;
 }
 
 async function inspectDatePicker(page) {
@@ -652,6 +815,12 @@ async function ensureDatePickerDateAvailable(page, targetDate, panelTitle) {
       throw new Error(`SHEIN date picker month could not be read for ${targetDate}.`);
     }
     const delta = monthIndex(target) - monthIndex(preferred);
+    if (delta === 0) {
+      throw new Error(
+        `SHEIN date picker shows the correct month for ${targetDate}, ` +
+        `but that date is disabled or unavailable in ${panelTitle}.`,
+      );
+    }
     const control = delta < 0 ? preferred.previousMonth : preferred.nextMonth;
     if (!control) throw new Error('SHEIN date picker month navigation control was not found.');
     await page.click(control.x, control.y);
@@ -699,10 +868,25 @@ async function setTrendDateRange(page, start, end) {
     await moveDatePickerStartMonth(page, start);
     await ensureDatePickerDateAvailable(page, start, '开始时间');
     await clickDatePickerDay(page, start, '开始时间');
-    await sleep(300);
+    if (!await waitForTrendDateInputValue(page, '开始时间', expectedStart)) {
+      throw new Error(`SHEIN start date did not commit after selecting ${start}.`);
+    }
 
+    await openTrendDatePicker(page, '结束时间');
     await ensureDatePickerDateAvailable(page, end, '结束时间');
     await clickDatePickerDay(page, end, '结束时间');
+
+    if (!await waitForTrendDateInputValue(page, '结束时间', expectedEnd)) {
+      throw new Error(`SHEIN end date did not commit after selecting ${end}.`);
+    }
+
+    const pickerDeadline = Date.now() + 5000;
+    while (Date.now() < pickerDeadline && await isDatePickerOpen(page)) {
+      await sleep(150);
+    }
+    if (await isDatePickerOpen(page)) {
+      throw new Error(`SHEIN date range ${start}..${end} did not finish after selecting the end date.`);
+    }
 
     const deadline = Date.now() + 5000;
     while (Date.now() < deadline) {
@@ -728,15 +912,29 @@ async function setTrendDateRange(page, start, end) {
 async function refreshTrendDateRange(page, range, trendDelay) {
   let lastError = null;
   for (let attempt = 1; attempt <= 3; attempt += 1) {
-    const refreshRange = buildTrendRefreshRange(range.start, range.end, attempt);
-    console.log(
-      `Refreshing SHEIN trend chart with temporary range ` +
-      `${refreshRange.start}..${refreshRange.end} before ${range.start}..${range.end}.`,
-    );
     try {
-      await setTrendDateRange(page, refreshRange.start, refreshRange.end);
-      await trendRenderPause(trendDelay);
-      await waitForTrendChartRange(page, refreshRange, 12000);
+      const currentValues = await readVisibleRangeValues(page);
+      const alreadyShowsTarget = visibleRangeMatches(currentValues, range.start, range.end);
+      if (alreadyShowsTarget || attempt > 1) {
+        const refreshRange = buildTrendRefreshRangeOutsideCurrent(
+          range.start,
+          range.end,
+          currentValues,
+          attempt,
+        );
+        console.log(
+          `Refreshing SHEIN trend chart with temporary range ` +
+          `${refreshRange.start}..${refreshRange.end} before ${range.start}..${range.end}.`,
+        );
+        await setTrendDateRange(page, refreshRange.start, refreshRange.end);
+        await trendRenderPause(trendDelay);
+        await waitForTrendChartRange(page, { ...refreshRange, dates: [refreshRange.start] }, 12000);
+      } else {
+        console.log(
+          `SHEIN trend inputs show ${currentValues.start || '<blank>'}..${currentValues.end || '<blank>'}; ` +
+          `selecting target ${range.start}..${range.end} directly.`,
+        );
+      }
 
       await setTrendDateRange(page, range.start, range.end);
       await trendRenderPause(trendDelay);
@@ -766,7 +964,12 @@ async function waitForTrendChartRange(page, range, timeoutMs) {
     if (trendChartMatchesRange(observedDates, range.start, range.end)) {
       return observedDates;
     }
-    await sleep(300);
+    const hovered = await readAllChartPointsByHover(page, range.dates.length);
+    observedDates = Object.keys(hovered).sort();
+    if (trendChartMatchesRange(observedDates, range.start, range.end)) {
+      return observedDates;
+    }
+    await sleep(500);
   }
   const inputs = await readVisibleRangeValues(page);
   throw new Error(
@@ -819,6 +1022,17 @@ export function buildTrendRefreshRange(start, end, attempt = 1) {
     start: formatIsoDate(addUtcDays(startDate, -offsetDays)),
     end: formatIsoDate(addUtcDays(endDate, -offsetDays)),
   };
+}
+
+export function buildTrendRefreshRangeOutsideCurrent(start, end, currentValues, attempt = 1) {
+  const currentStart = normalizeIsoDate(currentValues?.start);
+  if (!currentStart) {
+    const fallback = buildTrendRefreshRange(start, end, attempt);
+    return { start: fallback.start, end: fallback.start };
+  }
+  const offsetDays = Math.max(1, Number(attempt) || 1);
+  const temporaryDate = formatIsoDate(addUtcDays(parseIsoDate(currentStart), -offsetDays));
+  return { start: temporaryDate, end: temporaryDate };
 }
 
 export function trendChartMatchesRange(observedDates, start, end) {
@@ -912,6 +1126,17 @@ async function readEchartsOption(page, dates) {
 }
 
 async function readChartByHover(page, dates) {
+  const allPoints = await readAllChartPointsByHover(page, dates.length);
+  return Object.fromEntries(
+    Object.entries(allPoints).filter(([date]) => dates.includes(date)),
+  );
+}
+
+function visibleRangeMatches(values, start, end) {
+  return normalizeIsoDate(values?.start) === start && normalizeIsoDate(values?.end) === end;
+}
+
+async function readAllChartPointsByHover(page, expectedPointCount = 1) {
   const chart = await page.evaluate(`(() => {
     const modal = [...document.querySelectorAll('.soui-modal-panel, [role="dialog"], .ant-modal, .el-dialog')]
       .find((element) => {
@@ -936,7 +1161,7 @@ async function readChartByHover(page, dates) {
     throw new Error('SHEIN sales chart canvas or SVG was not found.');
   }
   const result = {};
-  const samples = Math.max(40, dates.length * 8);
+  const samples = Math.max(40, expectedPointCount * 8);
   for (let index = 0; index <= samples; index += 1) {
     const x = chart.x + chart.width * (0.04 + (0.92 * index) / samples);
     const y = chart.y + chart.height * 0.55;
@@ -958,10 +1183,9 @@ async function readChartByHover(page, dates) {
       return candidates.sort((a, b) => a.innerText.length - b.innerText.length)[0]?.innerText || '';
     })()`);
     const parsed = parseSalesTooltip(tooltip);
-    if (parsed && dates.includes(parsed.date)) {
+    if (parsed) {
       result[parsed.date] = parsed.sales;
     }
-    if (Object.keys(result).length === dates.length) break;
   }
   return result;
 }
@@ -1029,17 +1253,27 @@ async function closeTrendModal(page) {
   throw new Error('SHEIN trend modal remained open after the close action.');
 }
 
-async function clickNextProductPage(page, previousSignature) {
+export async function clickNextProductPage(page, previousSignature, previousPage) {
   const clicked = await page.evaluate(`(() => {
     const visible = (element) => {
       const rect = element?.getBoundingClientRect();
       return Boolean(rect && rect.width > 0 && rect.height > 0);
     };
-    const next = [...document.querySelectorAll('button, li, a')].find((element) => {
-      if (!visible(element)) return false;
-      const label = [element.innerText, element.getAttribute('aria-label'), element.title].filter(Boolean).join(' ');
-      return /下一页|next/i.test(label) || element.classList.contains('ant-pagination-next');
-    });
+    const pagination = [...document.querySelectorAll('.soui-pagination, .ant-pagination')].find(visible);
+    if (!pagination) return false;
+    const buttons = [...pagination.querySelectorAll('button')].filter(visible);
+    const numbered = buttons
+      .map((element) => ({
+        element,
+        page: /^\\d+$/.test((element.innerText || '').trim()) ? Number((element.innerText || '').trim()) : null,
+        current: element.classList.contains('soui-button-primary') ||
+          element.classList.contains('ant-pagination-item-active') || element.getAttribute('aria-current') === 'page',
+      }))
+      .filter((item) => item.page !== null);
+    const currentPage = numbered.find((item) => item.current)?.page || numbered[0]?.page || 1;
+    const nextNumbered = numbered.find((item) => item.page === currentPage + 1)?.element;
+    const nonNumbered = buttons.filter((button) => !/^\\d+$/.test((button.innerText || '').trim()));
+    const next = nextNumbered || nonNumbered.at(-1);
     if (!next || next.disabled || next.getAttribute('aria-disabled') === 'true' ||
         next.classList.contains('ant-pagination-disabled')) return false;
     next.click();
@@ -1052,7 +1286,13 @@ async function clickNextProductPage(page, previousSignature) {
   while (Date.now() < deadline) {
     const state = await inspectProductList(page);
     const signature = state.rows.map((row) => row.cargoNumber).join('|');
-    if (signature && signature !== previousSignature) return;
+    const expectedRows = expectedRowsOnPage(
+      state.currentPage,
+      state.expectedProducts,
+      state.pageSize,
+    );
+    if (signature && signature !== previousSignature && state.currentPage === previousPage + 1 &&
+        (expectedRows === null || state.rows.length === expectedRows)) return;
     await sleep(300);
   }
   throw new Error('SHEIN next product page did not finish loading.');

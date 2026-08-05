@@ -33,6 +33,15 @@ export function readSheinAccountsFromEnv(env = process.env, configDir = process.
       wpsNameColumn: env[`${prefix}WPS_NAME_COLUMN`],
       wpsSalesColumn: env[`${prefix}WPS_SALES_COLUMN`],
       wpsStartRow: env[`${prefix}WPS_START_ROW`],
+      wpsDailyTotalEnabled:
+        env[`${prefix}WPS_DAILY_TOTAL_ENABLED`] ?? env.SHEIN_WPS_DAILY_TOTAL_ENABLED ?? '1',
+      wpsTotalDocUrl: env[`${prefix}WPS_TOTAL_DOC_URL`],
+      wpsTotalSheetName: env[`${prefix}WPS_TOTAL_SHEET_NAME`],
+      wpsTotalDateColumn: env[`${prefix}WPS_TOTAL_DATE_COLUMN`],
+      wpsTotalSalesColumn: env[`${prefix}WPS_TOTAL_SALES_COLUMN`],
+      wpsTotalStartRow: env[`${prefix}WPS_TOTAL_START_ROW`],
+      wpsDailyTotalPayload:
+        env[`${prefix}WPS_DAILY_TOTAL_PAYLOAD`] || `output/shein-account-${index}-daily-totals.json`,
       humanDelayMinSeconds: env[`${prefix}HUMAN_DELAY_MIN_SECONDS`] || env.SHEIN_HUMAN_DELAY_MIN_SECONDS,
       humanDelayMaxSeconds: env[`${prefix}HUMAN_DELAY_MAX_SECONDS`] || env.SHEIN_HUMAN_DELAY_MAX_SECONDS,
       manualLoginTimeoutMs: env[`${prefix}LOGIN_TIMEOUT_MS`] || env.SHEIN_LOGIN_TIMEOUT_MS || '1800000',
@@ -80,6 +89,7 @@ export function readSheinAccountsFromEnv(env = process.env, configDir = process.
       index,
       salesDataPath,
       wpsPayloadPath,
+      dailyTotalsPayloadPath: normalized.wpsDailyTotalPayloadPath,
     };
   });
 

@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { resolve } from 'node:path';
 import { isSheinEnabled, readSheinAccountsFromEnv } from '../scripts/shein_account_config.js';
 
 function baseEnv() {
@@ -27,10 +28,10 @@ test('builds an isolated SHEIN account using the existing lookup and output cont
   const [account] = readSheinAccountsFromEnv(baseEnv(), '/workspace');
   assert.equal(account.name, 'SHEIN 1');
   assert.equal(account.cdpPort, '9322');
-  assert.equal(account.env.SOURCE_EXCEL_PATH, '/workspace/data/lookup.xlsx');
+  assert.equal(account.env.SOURCE_EXCEL_PATH, resolve('/workspace', 'data/lookup.xlsx'));
   assert.equal(account.env.SOURCE_EXCEL_SKU_CARGO_PRIMARY_COLUMN, 'A');
-  assert.equal(account.env.SALES_DATA_JSON_PATH, '/workspace/output/shein-account-1-sales-data.json');
-  assert.equal(account.env.WPS_UPDATE_PAYLOAD, '/workspace/output/shein-account-1-wps-payload.json');
+  assert.equal(account.env.SALES_DATA_JSON_PATH, resolve('/workspace', 'output/shein-account-1-sales-data.json'));
+  assert.equal(account.env.WPS_UPDATE_PAYLOAD, resolve('/workspace', 'output/shein-account-1-wps-payload.json'));
   assert.equal(account.env.SHEIN_LOGIN_TIMEOUT_MS, '1800000');
 });
 
@@ -44,9 +45,16 @@ test('only validates settings for the selected SHEIN output mode', () => {
   env.SHEIN_ACCOUNT_1_WPS_NAME_COLUMN = 'B';
   env.SHEIN_ACCOUNT_1_WPS_SALES_COLUMN = 'C';
   env.SHEIN_ACCOUNT_1_WPS_START_ROW = '4';
+  env.SHEIN_ACCOUNT_1_WPS_TOTAL_DOC_URL = 'https://www.kdocs.cn/l/totals';
+  env.SHEIN_ACCOUNT_1_WPS_TOTAL_SHEET_NAME = '总销量表';
+  env.SHEIN_ACCOUNT_1_WPS_TOTAL_DATE_COLUMN = 'G';
+  env.SHEIN_ACCOUNT_1_WPS_TOTAL_SALES_COLUMN = 'H';
+  env.SHEIN_ACCOUNT_1_WPS_TOTAL_START_ROW = '3';
   const [account] = readSheinAccountsFromEnv(env, '/workspace');
   assert.equal(account.outputMode, 3);
   assert.equal(account.env.WPS_DATE_COLUMN, 'A');
+  assert.equal(account.env.WPS_TOTAL_DATE_COLUMN, 'G');
+  assert.equal(account.env.WPS_TOTAL_SALES_COLUMN, 'H');
 });
 
 test('multiple SHEIN accounts may share one lookup workbook', () => {
@@ -63,6 +71,40 @@ test('multiple SHEIN accounts may share one lookup workbook', () => {
 
   const accounts = readSheinAccountsFromEnv(env, '/workspace');
   assert.equal(accounts.length, 2);
-  assert.equal(accounts[0].sourceExcel, '/workspace/data/lookup.xlsx');
-  assert.equal(accounts[1].sourceExcel, '/workspace/data/lookup.xlsx');
+  assert.equal(accounts[0].sourceExcel, resolve('/workspace', 'data/lookup.xlsx'));
+  assert.equal(accounts[1].sourceExcel, resolve('/workspace', 'data/lookup.xlsx'));
+});
+
+test('multiple SHEIN cloud accounts keep independent daily-total columns', () => {
+  const env = {
+    ...baseEnv(),
+    SHEIN_ACCOUNT_COUNT: '2',
+    SHEIN_OUTPUT_MODE: '3',
+  };
+  delete env.SHEIN_ACCOUNT_1_EXPORT_EXCEL_PATH;
+  for (const index of [1, 2]) {
+    env[`SHEIN_ACCOUNT_${index}_NAME`] = `SHEIN ${index}`;
+    env[`SHEIN_ACCOUNT_${index}_CDP_PORT`] = String(9321 + index);
+    env[`SHEIN_ACCOUNT_${index}_CHROME_PROFILE`] = `profiles/shein${index}`;
+    env[`SHEIN_ACCOUNT_${index}_SOURCE_EXCEL`] = 'data/lookup.xlsx';
+    env[`SHEIN_ACCOUNT_${index}_WPS_DOC_URL`] = 'https://www.kdocs.cn/l/details';
+    env[`SHEIN_ACCOUNT_${index}_WPS_SHEET_NAME`] = '运营数据记录表';
+    env[`SHEIN_ACCOUNT_${index}_WPS_DATE_COLUMN`] = index === 1 ? 'A' : 'D';
+    env[`SHEIN_ACCOUNT_${index}_WPS_NAME_COLUMN`] = index === 1 ? 'B' : 'E';
+    env[`SHEIN_ACCOUNT_${index}_WPS_SALES_COLUMN`] = index === 1 ? 'C' : 'F';
+    env[`SHEIN_ACCOUNT_${index}_WPS_START_ROW`] = '3';
+    env[`SHEIN_ACCOUNT_${index}_WPS_TOTAL_DOC_URL`] = 'https://www.kdocs.cn/l/totals';
+    env[`SHEIN_ACCOUNT_${index}_WPS_TOTAL_SHEET_NAME`] = '总销量表';
+    env[`SHEIN_ACCOUNT_${index}_WPS_TOTAL_DATE_COLUMN`] = index === 1 ? 'G' : 'J';
+    env[`SHEIN_ACCOUNT_${index}_WPS_TOTAL_SALES_COLUMN`] = index === 1 ? 'H' : 'K';
+    env[`SHEIN_ACCOUNT_${index}_WPS_TOTAL_START_ROW`] = '3';
+  }
+
+  const accounts = readSheinAccountsFromEnv(env, '/workspace');
+  assert.equal(accounts.length, 2);
+  assert.equal(accounts[0].env.WPS_TOTAL_DATE_COLUMN, 'G');
+  assert.equal(accounts[0].env.WPS_TOTAL_SALES_COLUMN, 'H');
+  assert.equal(accounts[1].env.WPS_TOTAL_DATE_COLUMN, 'J');
+  assert.equal(accounts[1].env.WPS_TOTAL_SALES_COLUMN, 'K');
+  assert.notEqual(accounts[0].dailyTotalsPayloadPath, accounts[1].dailyTotalsPayloadPath);
 });

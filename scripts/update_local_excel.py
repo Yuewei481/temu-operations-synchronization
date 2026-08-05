@@ -2,6 +2,7 @@
 import json
 import os
 import re
+from io import BytesIO
 from pathlib import Path
 
 from openpyxl import load_workbook
@@ -22,7 +23,9 @@ def main():
     if not payload_rows:
         raise ValueError(f"No rows to write in {PAYLOAD_PATH}")
 
-    workbook = load_workbook(target_path)
+    # Loading from memory prevents openpyxl from retaining a Windows file
+    # handle that would block the atomic replacement below.
+    workbook = load_workbook(BytesIO(target_path.read_bytes()))
     sheet_name = str(os.environ.get("LOCAL_TARGET_EXCEL_SHEET_NAME") or "").strip()
     if sheet_name:
         if sheet_name not in workbook.sheetnames:

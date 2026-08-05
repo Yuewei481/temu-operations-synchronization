@@ -27,11 +27,13 @@ export function resolveChromePath(env = process.env, options = {}) {
 
 export function chromePathCandidates(env = process.env, platform = process.platform) {
   if (platform === 'win32') {
+    const localAppData = readEnvCaseInsensitive(env, 'LOCALAPPDATA');
+    const programFiles = readEnvCaseInsensitive(env, 'PROGRAMFILES');
+    const programFilesX86 = readEnvCaseInsensitive(env, 'PROGRAMFILES(X86)');
     return uniqueNonEmpty([
-      env.LOCALAPPDATA && win32.join(env.LOCALAPPDATA, 'Google', 'Chrome', 'Application', 'chrome.exe'),
-      env.PROGRAMFILES && win32.join(env.PROGRAMFILES, 'Google', 'Chrome', 'Application', 'chrome.exe'),
-      env['PROGRAMFILES(X86)'] &&
-        win32.join(env['PROGRAMFILES(X86)'], 'Google', 'Chrome', 'Application', 'chrome.exe'),
+      localAppData && win32.join(localAppData, 'Google', 'Chrome', 'Application', 'chrome.exe'),
+      programFiles && win32.join(programFiles, 'Google', 'Chrome', 'Application', 'chrome.exe'),
+      programFilesX86 && win32.join(programFilesX86, 'Google', 'Chrome', 'Application', 'chrome.exe'),
     ]);
   }
 
@@ -48,6 +50,11 @@ export function chromePathCandidates(env = process.env, platform = process.platf
     '/usr/bin/chromium',
     '/usr/bin/chromium-browser',
   ]);
+}
+
+function readEnvCaseInsensitive(env, name) {
+  const entry = Object.entries(env).find(([key]) => key.toUpperCase() === name);
+  return entry?.[1];
 }
 
 function uniqueNonEmpty(values) {

@@ -40,6 +40,7 @@ def main():
 
     OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
     workbook.save(OUTPUT_PATH)
+    workbook.close()
     print(f"Saved SKU sales Excel: {OUTPUT_PATH}")
     print(f"Date sheets: {len(sales_by_date)}")
     print(f"Rows by date: {', '.join(f'{date}={len(rows)}' for date, rows in sales_by_date.items())}")

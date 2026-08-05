@@ -3,6 +3,7 @@ import os
 import sys
 import tempfile
 import unittest
+from io import BytesIO
 from pathlib import Path
 from unittest.mock import patch
 
@@ -55,7 +56,7 @@ class UpdateLocalExcelTest(unittest.TestCase):
                 with patch.object(update_local_excel, "PAYLOAD_PATH", payload_path):
                     update_local_excel.main()
 
-            result = load_workbook(workbook_path, data_only=True)
+            result = load_workbook(BytesIO(workbook_path.read_bytes()), data_only=True)
             result_sheet = result["运营数据记录表"]
             self.assertEqual(result_sheet["C2"].value, 5)
             self.assertEqual(result_sheet["D2"].value, "保留")
