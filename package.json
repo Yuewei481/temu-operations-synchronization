@@ -25,9 +25,7 @@
     "update-wps-daily-totals": "node scripts/update_wps_daily_totals_cdp.js",
     "sync-wps": "node scripts/sync_collect_to_wps.js",
     "sync-wps:accounts": "node scripts/sync_accounts_to_wps.js",
-    "sync-shein": "node scripts/sync_shein_accounts.js",
-    "login": "node scripts/login_seller_central.js",
-    "debug:login-submit": "node scripts/debug_login_submit.js"
+    "sync-shein": "node scripts/sync_shein_accounts.js"
   },
   "dependencies": {
     "playwright": "^1.56.0"

@@ -30,31 +30,6 @@ export async function loadEnvFile(path = '.env') {
   return parseEnvText(text);
 }
 
-export function readSellerConfig(env) {
-  const requiredKeys = ['SELLER_PHONE_COUNTRY_CODE', 'SELLER_PHONE', 'SELLER_PASSWORD'];
-  const missingKeys = requiredKeys.filter((key) => !env[key]);
-
-  if (missingKeys.length > 0) {
-    throw new Error(`Missing required env values: ${missingKeys.join(', ')}`);
-  }
-
-  return {
-    countryCode: normalizeCountryCode(env.SELLER_PHONE_COUNTRY_CODE),
-    phone: env.SELLER_PHONE.trim(),
-    password: env.SELLER_PASSWORD,
-    loginUrl: env.SELLER_LOGIN_URL || DEFAULT_LOGIN_URL,
-    storageStatePath: env.SELLER_STORAGE_STATE_PATH || 'output/playwright/seller-storage-state.json',
-    screenshotPath: env.SELLER_FAILURE_SCREENSHOT_PATH || 'output/playwright/login-failure.png',
-    browserChannel: env.BROWSER_CHANNEL || '',
-    userDataDir: env.USER_DATA_DIR || 'output/playwright/browser-profile',
-    headless: env.HEADLESS === '1' || env.HEADLESS === 'true',
-  };
-}
-
-function normalizeCountryCode(countryCode) {
-  return countryCode.trim().replace(/^\+/, '');
-}
-
 function stripOptionalQuotes(value) {
   if (
     (value.startsWith('"') && value.endsWith('"')) ||
