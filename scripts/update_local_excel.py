@@ -60,8 +60,14 @@ def main():
         key = (date, name)
         row_index = existing_rows.get(key)
         if row_index is None:
-            row_index = next_row
-            next_row += 1
+            row_index = next_writable_row(
+                sheet,
+                next_row,
+                date_column,
+                name_column,
+                sales_column,
+            )
+            next_row = row_index + 1
             sheet.cell(row_index, date_column).value = date
             sheet.cell(row_index, name_column).value = name
             existing_rows[key] = row_index
@@ -127,9 +133,32 @@ def index_existing_rows(sheet, start_row, date_column, name_column, sales_column
         sales = sheet.cell(row_index, sales_column).value
         if date or name or sales not in (None, ""):
             last_used_row = row_index
+        if row_has_merged_target_cell(
+            sheet,
+            row_index,
+            date_column,
+            name_column,
+            sales_column,
+        ):
+            continue
         if date and name and (date, name) not in index:
             index[(date, name)] = row_index
     return index, last_used_row
+
+
+def next_writable_row(sheet, start_row, *columns):
+    row_index = start_row
+    while row_has_merged_target_cell(sheet, row_index, *columns):
+        row_index += 1
+    return row_index
+
+
+def row_has_merged_target_cell(sheet, row_index, *columns):
+    return any(
+        merged_range.min_row <= row_index <= merged_range.max_row
+        and any(merged_range.min_col <= column <= merged_range.max_col for column in columns)
+        for merged_range in sheet.merged_cells.ranges
+    )
 
 
 def normalize_date(value):

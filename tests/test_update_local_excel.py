@@ -129,6 +129,49 @@ class UpdateLocalExcelTest(unittest.TestCase):
             self.assertEqual(result_sheet["C3"].value, 8)
             result.close()
 
+    def test_skips_merged_rows_when_appending(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            temporary_path = Path(temporary_directory)
+            workbook_path = temporary_path / "merged-target.xlsx"
+            payload_path = temporary_path / "payload.json"
+
+            workbook = Workbook()
+            sheet = workbook.active
+            sheet.title = "target"
+            sheet.merge_cells("A2:C2")
+            sheet["A2"] = "merged template row"
+            workbook.save(workbook_path)
+            workbook.close()
+
+            payload_path.write_text(
+                json.dumps(
+                    {"rows": [{"date": "2026/8/1", "name": "product A", "sales": 7}]},
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            environment = {
+                "LOCAL_TARGET_EXCEL_PATH": str(workbook_path),
+                "LOCAL_TARGET_EXCEL_SHEET_NAME": "target",
+                "LOCAL_TARGET_DATE_COLUMN": "A",
+                "LOCAL_TARGET_NAME_COLUMN": "B",
+                "LOCAL_TARGET_SALES_COLUMN": "C",
+                "LOCAL_TARGET_START_ROW": "2",
+            }
+            with patch.dict(os.environ, environment, clear=False):
+                with patch.object(update_local_excel, "PAYLOAD_PATH", payload_path):
+                    update_local_excel.main()
+
+            result = load_workbook(BytesIO(workbook_path.read_bytes()), data_only=True)
+            result_sheet = result["target"]
+            self.assertEqual(result_sheet["A2"].value, "merged template row")
+            self.assertEqual(
+                [result_sheet["A3"].value, result_sheet["B3"].value, result_sheet["C3"].value],
+                ["2026/8/1", "product A", 7],
+            )
+            result.close()
+
     def test_appends_rows_in_date_batches(self):
         rows = [
             {"date": "2026/8/2", "name": "商品A", "sales": 1},
