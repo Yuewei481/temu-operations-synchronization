@@ -204,3 +204,46 @@ test('rejects duplicate export paths only for accounts using mode 1', () => {
     /export Excel path/,
   );
 });
+
+test('allows output modes 2 and 3 to reuse write targets without collision checks', () => {
+  assert.doesNotThrow(() => validateUniqueAccountSettings([
+    {
+      name: 'TEMU 1',
+      outputMode: 2,
+      cdpPort: '9222',
+      chromeProfile: '/profiles/temu1',
+      targetExcelPath: '/targets/shared.xlsx',
+      localDailyTotalEnabled: true,
+      localDailyTotalPayloadPath: '/payloads/shared.json',
+      localTotalTargetKey: '/targets/shared.xlsx|总销量表|A|B',
+    },
+    {
+      name: 'TEMU 2',
+      outputMode: 2,
+      cdpPort: '9223',
+      chromeProfile: '/profiles/temu2',
+      targetExcelPath: '/targets/shared.xlsx',
+      localDailyTotalEnabled: true,
+      localDailyTotalPayloadPath: '/payloads/shared.json',
+      localTotalTargetKey: '/targets/shared.xlsx|总销量表|A|B',
+    },
+    {
+      name: 'SHEIN 1',
+      outputMode: 3,
+      cdpPort: '9332',
+      chromeProfile: '/profiles/shein1',
+      wpsDailyTotalEnabled: true,
+      wpsDailyTotalPayloadPath: '/payloads/wps-shared.json',
+      wpsTotalTargetKey: 'https://www.kdocs.cn/l/shared|总销量表|G|H',
+    },
+    {
+      name: 'SHEIN 2',
+      outputMode: 3,
+      cdpPort: '9333',
+      chromeProfile: '/profiles/shein2',
+      wpsDailyTotalEnabled: true,
+      wpsDailyTotalPayloadPath: '/payloads/wps-shared.json',
+      wpsTotalTargetKey: 'https://www.kdocs.cn/l/shared|总销量表|G|H',
+    },
+  ]));
+});

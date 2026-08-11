@@ -396,27 +396,6 @@ export function validateUniqueAccountSettings(accounts) {
   assertUnique(accounts, 'cdpPort', 'CDP port');
   assertUnique(accounts, 'chromeProfile', 'Chrome profile');
   assertUniqueNonEmpty(accounts.filter((account) => account.outputMode === 1), 'exportExcelPath', 'export Excel path');
-  assertUniqueNonEmpty(accounts.filter((account) => account.outputMode === 2), 'targetExcelPath', 'target Excel path');
-  assertUniqueNonEmpty(
-    accounts.filter((account) => account.localDailyTotalEnabled),
-    'localDailyTotalPayloadPath',
-    'local daily-total payload path',
-  );
-  assertUniqueNonEmpty(
-    accounts.filter((account) => account.localDailyTotalEnabled),
-    'localTotalTargetKey',
-    'local daily-total target',
-  );
-  assertUniqueNonEmpty(
-    accounts.filter((account) => account.wpsDailyTotalEnabled),
-    'wpsDailyTotalPayloadPath',
-    'daily-total payload path',
-  );
-  assertUniqueNonEmpty(
-    accounts.filter((account) => account.wpsDailyTotalEnabled),
-    'wpsTotalTargetKey',
-    'WPS daily-total target',
-  );
 }
 
 export function parseOutputMode(value) {

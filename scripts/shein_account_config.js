@@ -104,8 +104,6 @@ export function readSheinAccountsFromEnv(env = process.env, configDir = process.
   });
 
   validateUniqueAccountSettings(accounts);
-  assertUnique(accounts, 'salesDataPath', 'sales data JSON path');
-  assertUnique(accounts, 'wpsPayloadPath', 'WPS payload path');
   return accounts;
 }
 
@@ -127,18 +125,4 @@ function resolveConfigPath(value, configDir) {
     return '';
   }
   return isAbsolute(text) || /^[A-Za-z]:[\\/]/.test(text) ? text : resolve(configDir, text);
-}
-
-function assertUnique(accounts, key, label) {
-  const seen = new Map();
-  for (const account of accounts) {
-    const value = account[key];
-    if (!value) {
-      continue;
-    }
-    if (seen.has(value)) {
-      throw new Error(`${label} "${value}" is shared by "${seen.get(value)}" and "${account.name}".`);
-    }
-    seen.set(value, account.name);
-  }
 }

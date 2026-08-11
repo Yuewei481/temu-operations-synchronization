@@ -17,6 +17,70 @@ import update_local_excel
 
 
 class UpdateLocalExcelTest(unittest.TestCase):
+    def test_two_accounts_can_write_separate_columns_in_the_same_sheet(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            temporary_path = Path(temporary_directory)
+            workbook_path = temporary_path / "shared.xlsx"
+            payload_1_path = temporary_path / "account-1.json"
+            payload_2_path = temporary_path / "account-2.json"
+
+            workbook = Workbook()
+            workbook.active.title = "运营数据记录表"
+            workbook.save(workbook_path)
+            workbook.close()
+
+            payload_1_path.write_text(
+                json.dumps(
+                    {"rows": [{"date": "2026/8/1", "name": "TEMU 1 商品", "sales": 11}]},
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            payload_2_path.write_text(
+                json.dumps(
+                    {"rows": [{"date": "2026/8/1", "name": "TEMU 2 商品", "sales": 22}]},
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            common_environment = {
+                "LOCAL_TARGET_EXCEL_PATH": str(workbook_path),
+                "LOCAL_TARGET_EXCEL_SHEET_NAME": "运营数据记录表",
+                "LOCAL_TARGET_START_ROW": "2",
+            }
+            with patch.dict(
+                os.environ,
+                {
+                    **common_environment,
+                    "LOCAL_TARGET_DATE_COLUMN": "A",
+                    "LOCAL_TARGET_NAME_COLUMN": "B",
+                    "LOCAL_TARGET_SALES_COLUMN": "C",
+                },
+                clear=False,
+            ):
+                with patch.object(update_local_excel, "PAYLOAD_PATH", payload_1_path):
+                    update_local_excel.main()
+
+            with patch.dict(
+                os.environ,
+                {
+                    **common_environment,
+                    "LOCAL_TARGET_DATE_COLUMN": "E",
+                    "LOCAL_TARGET_NAME_COLUMN": "F",
+                    "LOCAL_TARGET_SALES_COLUMN": "G",
+                },
+                clear=False,
+            ):
+                with patch.object(update_local_excel, "PAYLOAD_PATH", payload_2_path):
+                    update_local_excel.main()
+
+            result = load_workbook(BytesIO(workbook_path.read_bytes()), data_only=True)
+            sheet = result["运营数据记录表"]
+            self.assertEqual([sheet["A2"].value, sheet["B2"].value, sheet["C2"].value], ["2026/8/1", "TEMU 1 商品", 11])
+            self.assertEqual([sheet["E2"].value, sheet["F2"].value, sheet["G2"].value], ["2026/8/1", "TEMU 2 商品", 22])
+            result.close()
+
     def test_updates_existing_row_and_appends_missing_row(self):
         with tempfile.TemporaryDirectory() as temporary_directory:
             temporary_path = Path(temporary_directory)

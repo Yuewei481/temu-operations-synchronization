@@ -122,6 +122,9 @@ test('multiple SHEIN cloud accounts keep independent daily-total columns', () =>
     env[`SHEIN_ACCOUNT_${index}_WPS_TOTAL_DATE_COLUMN`] = index === 1 ? 'G' : 'J';
     env[`SHEIN_ACCOUNT_${index}_WPS_TOTAL_SALES_COLUMN`] = index === 1 ? 'H' : 'K';
     env[`SHEIN_ACCOUNT_${index}_WPS_TOTAL_START_ROW`] = '3';
+    env[`SHEIN_ACCOUNT_${index}_SALES_DATA_JSON_PATH`] = 'output/shared-shein-sales.json';
+    env[`SHEIN_ACCOUNT_${index}_WPS_UPDATE_PAYLOAD`] = 'output/shared-shein-update.json';
+    env[`SHEIN_ACCOUNT_${index}_WPS_DAILY_TOTAL_PAYLOAD`] = 'output/shared-shein-totals.json';
   }
 
   const accounts = readSheinAccountsFromEnv(env, '/workspace');
@@ -130,5 +133,7 @@ test('multiple SHEIN cloud accounts keep independent daily-total columns', () =>
   assert.equal(accounts[0].env.WPS_TOTAL_SALES_COLUMN, 'H');
   assert.equal(accounts[1].env.WPS_TOTAL_DATE_COLUMN, 'J');
   assert.equal(accounts[1].env.WPS_TOTAL_SALES_COLUMN, 'K');
-  assert.notEqual(accounts[0].dailyTotalsPayloadPath, accounts[1].dailyTotalsPayloadPath);
+  assert.equal(accounts[0].salesDataPath, accounts[1].salesDataPath);
+  assert.equal(accounts[0].wpsPayloadPath, accounts[1].wpsPayloadPath);
+  assert.equal(accounts[0].dailyTotalsPayloadPath, accounts[1].dailyTotalsPayloadPath);
 });

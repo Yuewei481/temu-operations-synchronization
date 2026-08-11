@@ -18,7 +18,7 @@
 - 支持三个互斥输出模式：新建 Excel、更新本地 Excel、更新 WPS 云表格。
 - WPS 明细按“日期 + 商品名称”匹配，存在则更新，不存在则追加。
 - WPS 每日总销量按日期匹配，存在则更新，不存在则追加。
-- TEMU、SHEIN 和每个账号都可以指定独立的 WPS 文档、Sheet、列和起始行。
+- TEMU、SHEIN 和每个账号可以指定独立的 WPS 文档、Sheet、列和起始行，也可以共用相同目标。
 - 支持多个 TEMU 账号和多个 SHEIN 账号顺序执行。
 - WPS 未登录时持续等待；登录完成、目标文档稳定且编辑 API 可用后才开始写入。
 - 每个账号使用独立 Chrome Profile，保存各自登录状态。
@@ -150,8 +150,8 @@ CHROME_PATH=
 一次运行只执行选中的一种输出模式。
 
 本地 Excel 模式也支持每日总销量。明细和总销量写入同一个文件时，
-`LOCAL_TOTAL_EXCEL_PATH` 可以留空，程序会自动使用 `TARGET_EXCEL_PATH`；
-只需为两者指定不同的 Sheet：
+`LOCAL_TOTAL_EXCEL_PATH` 可以留空，程序会自动使用 `TARGET_EXCEL_PATH`。
+它们也可以使用相同 Sheet 或列；下面为了分别保留明细和总销量，示例使用不同 Sheet：
 
 ```env
 OUTPUT_MODE=2
@@ -170,6 +170,38 @@ ACCOUNT_1_LOCAL_TOTAL_DATE_COLUMN=A
 ACCOUNT_1_LOCAL_TOTAL_SALES_COLUMN=B
 ACCOUNT_1_LOCAL_TOTAL_START_ROW=3
 ```
+
+多个账户可以把明细写入同一个本地 Excel、同一个 Sheet。为了分别保留各账户结果，建议配置不同列，例如：
+
+```env
+ACCOUNT_1_TARGET_EXCEL_PATH=C:/automation-output/sales.xlsx
+ACCOUNT_1_TARGET_EXCEL_SHEET_NAME=运营数据记录表
+ACCOUNT_1_TARGET_EXCEL_DATE_COLUMN=A
+ACCOUNT_1_TARGET_EXCEL_NAME_COLUMN=B
+ACCOUNT_1_TARGET_EXCEL_SALES_COLUMN=C
+
+ACCOUNT_2_TARGET_EXCEL_PATH=C:/automation-output/sales.xlsx
+ACCOUNT_2_TARGET_EXCEL_SHEET_NAME=运营数据记录表
+ACCOUNT_2_TARGET_EXCEL_DATE_COLUMN=E
+ACCOUNT_2_TARGET_EXCEL_NAME_COLUMN=F
+ACCOUNT_2_TARGET_EXCEL_SALES_COLUMN=G
+```
+
+模式 2 和模式 3 不检查写入目标冲突。TEMU 与 SHEIN 的多个账户可以共用：
+
+- 同一个本地 Excel 文件或 WPS 云文档；
+- 同一个 Sheet；
+- 相同的明细列；
+- 相同的总销量位置；
+- 相同的中间数据路径。
+
+账户会依次执行，后写入的账户可能更新或覆盖前一个账户的结果。不同列或不同 Sheet 只是保留各账户结果的建议，不是强制要求。
+
+仍然保留以下限制：
+
+- 模式 1 的每个账户必须使用不同的独立输出文件名；
+- 不同账户必须使用不同的 CDP 端口；
+- 不同账户必须使用不同的 Chrome Profile，以隔离登录会话。
 
 SHEIN 使用同样结构的 `SHEIN_ACCOUNT_1_LOCAL_*` 配置。每日总销量只统计在对照 Excel 中成功匹配的商品。
 
@@ -238,7 +270,7 @@ SHEIN_ACCOUNT_1_WPS_TOTAL_SALES_COLUMN=H
 SHEIN_ACCOUNT_1_WPS_TOTAL_START_ROW=3
 ```
 
-TEMU 和 SHEIN 可以共用同一个对照 Excel，也可以写入同一个 WPS 文档的不同列。
+TEMU 和 SHEIN 可以共用同一个对照 Excel，也可以写入同一个 WPS 文档的相同或不同列。
 
 ### 多账号规则
 
