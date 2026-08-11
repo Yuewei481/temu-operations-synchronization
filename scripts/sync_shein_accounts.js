@@ -154,8 +154,8 @@ async function ensureChromeCdpAndSheinTab(env) {
 
   console.log(
     startedByScript
-      ? 'Chrome was opened for SHEIN. Please finish the manual login in that window.'
-      : 'The configured SHEIN Chrome session is already running.',
+      ? 'Chrome was opened for SHEIN. A saved session will be reused; otherwise, please finish manual login.'
+      : 'The configured SHEIN Chrome session is already running and will be checked for login.',
   );
 }
 

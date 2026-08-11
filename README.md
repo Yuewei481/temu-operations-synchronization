@@ -99,7 +99,7 @@ Copy-Item .env.example .env
 notepad .env
 ```
 
-不要把 `.env` 提交到 Git，其中可能包含账号、本机路径和 WPS 文档地址。
+不要把 `.env` 提交到 Git，其中可能包含账号、本机路径和 WPS 文档地址。TEMU 的国家区号、手机号和密码三项全部填写时才会启用自动登录；任意一项为空时，脚本会直接使用已保存的 Chrome 登录状态，必要时等待手动登录。SHEIN 始终优先复用对应 Chrome Profile 的登录状态，状态失效时等待手动登录，不要求在 `.env` 保存账号密码。
 
 ## macOS 安装
 

@@ -24,7 +24,7 @@ export async function collectSheinSales(env = process.env) {
   console.log(
     `SHEIN date range(s): ${dateRanges.map((range) => `${range.start}..${range.end}`).join(', ')}`,
   );
-  console.log('Waiting for manual SHEIN login (maximum 30 minutes)...');
+  console.log('Checking the saved SHEIN Chrome session; waiting for manual login if needed...');
   await waitForSheinLogin(cdpOrigin, homeUrl, detailsUrl, loginTimeoutMs);
 
   await navigateSheinPage(cdpOrigin, homeUrl, detailsUrl);
@@ -79,7 +79,7 @@ async function waitForSheinLogin(cdpOrigin, homeUrl, detailsUrl, timeoutMs) {
     }
     await sleep(1000);
   }
-  throw new Error('SHEIN manual login timed out before the authenticated home page was detected.');
+  throw new Error('SHEIN login timed out before the authenticated home page was detected.');
 }
 
 async function navigateSheinPage(cdpOrigin, homeUrl, detailsUrl) {
